@@ -197,6 +197,69 @@ service cloud.firestore {
         && request.resource.data.rid.size() <= 20 && request.resource.data.get('cid', '').size() <= 40;
     }
 
+    // HELP & SUPPORT: a phone writes one message, once; only the admin panel can read or answer it.
+    match /support/{id} {
+      allow create: if id.matches('^[1-9][0-9]{7}_[0-9]{13}$')
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'topic', 'message', 'status', 'at', 'version', 'device', 'os', 'country', 'language', 'level', 'pass', 'screen'])
+        && request.resource.data.uid == id.split('_')[0] && request.resource.data.status == 'open'
+        && request.resource.data.topic in ['BUG', 'PAYMENT', 'ADS', 'ACCOUNT', 'IDEA', 'OTHER']
+        && request.resource.data.message is string && request.resource.data.message.size() >= 5 && request.resource.data.message.size() <= 800
+        && request.resource.data.get('name', '').size() <= 40 && request.resource.data.get('device', '').size() <= 60 && request.resource.data.get('os', '').size() <= 60;
+      allow read, update, delete: if isAdmin();
+    }
+    // Analytics: phones add to their own counters, a limited amount each time, and can't read anyone's; the admin panel reads them.
+    function isId(x) { return x.matches('^[1-9][0-9]{7}$'); }
+    function before(f) { return resource == null ? 0 : resource.data.get(f, 0); }
+    function grows(f, most) {
+      let v = request.resource.data.get(f, 0);
+      return v is int && v >= before(f) && v - before(f) <= most;
+    }
+    function counters() {
+      return grows('seconds', 3600) && grows('sessions', 20) && grows('races', 100) && grows('ads', 800)
+        && grows('rewarded', 200) && grows('interstitial', 200) && grows('banner', 200) && grows('native', 200);
+    }
+    function oneMore() { return request.resource.data.keys().hasOnly(['n']) && request.resource.data.n is int && request.resource.data.n == before('n') + 1; }
+    function dimKey(k) { return k.matches('^c_[A-Z]{2}$') || k.matches('^v_[0-9.]{1,12}$'); }
+    function dayField(f) { return !(f in request.resource.data) || (request.resource.data[f] is int && request.resource.data[f] >= 0 && request.resource.data[f] <= 99991231); }
+    match /stats_players/{uid} {
+      allow read: if isAdmin();
+      allow delete: if false;
+      allow create, update: if isId(uid) && counters() && dayField('firstDay') && dayField('lastDay')
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'country', 'version', 'level', 'firstDay', 'lastDay', 'lastAt', 'seconds', 'sessions', 'races', 'ads', 'rewarded', 'interstitial', 'banner', 'native'])
+        && request.resource.data.uid == uid && request.resource.data.get('name', '').size() <= 40 && request.resource.data.country.matches('^[A-Z]{2}$');
+    }
+    match /stats_all/{key} {
+      allow read: if isAdmin();
+      allow create, update: if key.matches('^c_[A-Z]{2}$') && oneMore();
+      allow delete: if false;
+    }
+    match /stats_days/{day} {
+      match /players/{uid} {
+        allow read: if isAdmin();
+        allow delete: if false;
+        allow create, update: if day.matches('^20[0-9]{6}$') && isId(uid) && counters() && dayField('firstDay')
+          && request.resource.data.keys().hasOnly(['uid', 'country', 'firstDay', 'new', 'seconds', 'sessions', 'races', 'ads', 'rewarded', 'interstitial', 'banner', 'native'])
+          && request.resource.data.uid == uid && request.resource.data.country.matches('^[A-Z]{2}$') && request.resource.data.get('new', 0) in [0, 1];
+      }
+      match /dims/{key} {
+        allow read: if isAdmin();
+        allow create, update: if day.matches('^20[0-9]{6}$') && dimKey(key) && oneMore();
+        allow delete: if false;
+      }
+    }
+    match /stats_months/{month} {
+      match /players/{uid} {
+        allow read: if isAdmin();
+        allow create: if month.matches('^20[0-9]{4}$') && isId(uid) && request.resource.data.keys().hasOnly(['day']) && request.resource.data.day is int;
+        allow update, delete: if false;
+      }
+      match /dims/{key} {
+        allow read: if isAdmin();
+        allow create, update: if month.matches('^20[0-9]{4}$') && key.matches('^c_[A-Z]{2}$') && oneMore();
+        allow delete: if false;
+      }
+    }
+
     match /rooms/{code} {
       allow get: if code.matches('^[A-Z]{4}$');
       allow list: if false;

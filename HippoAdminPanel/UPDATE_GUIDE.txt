@@ -1,0 +1,43 @@
+ADMIN PANEL UPDATE: ANALYTICS + HELP & SUPPORT
+==============================================
+Pehle se panel chal raha hai, isliye sirf ye 4 kaam karo, ISI ORDER me.
+
+1) NAYE RULES DEPLOY KARO
+   cd ~/Downloads/RaftParty_Game/RaftGame_Assets/RaftParty_UnityProject/Firebase
+   firebase deploy --only firestore:rules --project fart2-d0d9f
+
+2) GITHUB PE 3 FILES BADLO
+   Repo agentvoo.github.io > HippoAdminPanel > website
+   Zip ke website folder se ye upload karke purani replace karo:
+      style.css
+      js/app.js
+      js/firebase.js
+   (js wali dono files repo ke js folder me hi jaani chahiye.)
+   1-2 minute baad panel kholo aur Cmd+Shift+R dabao.
+
+3) PLAY CONSOLE: DATA SAFETY + PRIVACY POLICY UPDATE KARO (zaroori)
+   Game ab ye data bhejta hai. App content > Data safety me add karo:
+     - Personal info: User IDs, Name (player ka game naam)
+     - Location: Approximate location (sirf country)
+     - App activity: App interactions (time, races)
+     - App activity: Other user-generated content (support message)
+     - App info and performance: Diagnostics
+     - Device or other IDs: nahi; phone model support message ke saath jata hai
+   Purpose: Analytics, App functionality, Customer support.
+   Privacy policy me bhi ye sab likho. Ye naya game release karne se PEHLE karna hai.
+
+4) NAYA GAME UPDATE DAALO
+   Ads, time, country aur support ka data naye version se hi aayega.
+   Live players aur total players abhi se dikhenge.
+
+PANEL ME NAYA
+  Analytics       Live now, aaj, mahine ke players, naye players, avg time, races
+                  Rewarded, Interstitial, Banner, Native: today / yesterday / 7 days / month / all time
+                  30 din ka graph, countries, top players, Day 1 / Day 7 wapsi, game versions
+  Help & Support  Player ka message, uski ID, country, phone, version sab ke saath.
+                  Reply karo to uske game MAIL me jata hai, notification ke saath.
+
+DHYAN RAKHNA
+  - Live number har 20 second me update hota hai.
+  - Ads ka number game ka count hai. Paisa kitna bana, wo AdMob me hi sahi dikhega.
+  - Country SIM ya phone ki region se aati hai, GPS se nahi.

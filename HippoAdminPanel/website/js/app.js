@@ -34,7 +34,7 @@ const ICONS = {
   mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-2-4-2 1-2-1-1-3H10L9 7 7 8 5 7l-2 4 2 1v2l-2 1 2 4 2-1 2 1 1 3h4l1-3 2-1 2 1 2-4-2-1z',
   log: 'M12 7v5l3 3M12 22a10 10 0 110-20 10 10 0 010 20z',
-  menu: 'M3 6h18M3 12h18M3 18h18', copy: 'M9 9h12v12H9zM5 15H3V3h12v2', trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2', help: 'M3 14v-2a9 9 0 0118 0v2M3 14a2 2 0 012-2h1v7H5a2 2 0 01-2-2zM21 14a2 2 0 00-2-2h-1v7h1a2 2 0 002-2zM18 19c0 2-2 3-5 3', menu: 'M3 6h18M3 12h18M3 18h18', copy: 'M9 9h12v12H9zM5 15H3V3h12v2', trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
 };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -207,19 +207,20 @@ function notAdminScreen() {
 
 // ------------------------------------------------------------------ the frame
 const NAV = [
-  ['', [['dashboard', 'Dashboard', 'home']]],
+  ['', [['dashboard', 'Dashboard', 'home'], ['analytics', 'Analytics', 'chart'], ['support', 'Help & Support', 'help']]],
   ['BHEJO', [['gift', 'Send Gift / Mail', 'gift'], ['notify', 'Notification', 'bell'], ['history', 'Sent Mail', 'mail']]],
   ['LOG', [['forms', 'Creator Forms', 'form'], ['creators', 'Creators', 'star'], ['partners', 'Partners', 'crown'], ['players', 'Players', 'users']]],
   ['GAME', [['rivers', 'Rivers', 'river'], ['reports', 'Reports', 'flag'], ['settings', 'Game Settings', 'gear'], ['log', 'Activity Log', 'log']]],
 ];
-const PAGES = { dashboard, gift: v => composer(v, false), notify: v => composer(v, true), history, forms, creators: v => people(v, 'creators'), partners: v => people(v, 'partners'), players, rivers, reports, settings, log: activity };
-let view, side, pendingBadge, prefill = null;
+const PAGES = { dashboard, analytics, support, gift: v => composer(v, false), notify: v => composer(v, true), history, forms, creators: v => people(v, 'creators'), partners: v => people(v, 'partners'), players, rivers, reports, settings, log: activity };
+let view, side, pendingBadge, supportBadge, prefill = null, leaveWork = [];
 function go(page, data) { prefill = data || null; if (location.hash.slice(1) === page) route(); else location.hash = page; }
 function shell() {
   view = h('main.main', { id: 'main' });
   pendingBadge = h('span.count', { hidden: true });
+  supportBadge = h('span.count', { hidden: true });
   const menu = h('nav', { 'aria-label': 'Main' }, NAV.map(([group, items]) => [group ? h('div.navgroup', {}, group) : null, items.map(([id, label, ic]) =>
-    h('button.navbtn', { 'data-page': id, onclick: () => { side.classList.remove('open'); document.querySelector('.scrim')?.remove(); go(id); } }, icon(ic), label, id === 'forms' ? pendingBadge : null))]));
+    h('button.navbtn', { 'data-page': id, onclick: () => { side.classList.remove('open'); document.querySelector('.scrim')?.remove(); go(id); } }, icon(ic), label, id === 'forms' ? pendingBadge : id === 'support' ? supportBadge : null))]));
   side = h('aside.side', {}, h('div.brand', {}, h('img', { src: 'assets/logo.png', alt: 'Hippo Raft Rush' }), h('span', {}, 'ADMIN')), menu,
     h('div.who', {}, me.photoURL ? h('img', { src: me.photoURL, alt: '', referrerpolicy: 'no-referrer' }) : null, h('div', {}, h('b', {}, me.displayName || me.email || 'Admin')), h('button.btn.small.ghost', { onclick: () => fb.signOut(auth) }, 'Logout')));
   const top = h('header.top', {}, h('img', { src: 'assets/logo.png', alt: 'Hippo Raft Rush' }), h('b', {}, 'ADMIN'), h('button.btn.small', { 'aria-label': 'Menu', onclick: () => { side.classList.add('open'); const s = h('div.scrim', { onclick: () => { side.classList.remove('open'); s.remove(); } }); document.body.append(s); } }, icon('menu')));
@@ -230,14 +231,17 @@ function shell() {
 async function refreshBadge() {
   const n = await count(fb.query(col('wow_apply'), fb.where('status', '==', 'pending')));
   if (pendingBadge) { pendingBadge.hidden = !n; pendingBadge.textContent = n || ''; }
+  const s = await count(fb.query(col('support'), fb.where('status', '==', 'open')));
+  if (supportBadge) { supportBadge.hidden = !s; supportBadge.textContent = s || ''; }
 }
 let routeToken = 0;
 async function route() {
   const page = PAGES[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
   document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('on', b.dataset.page === page));
+  leaveWork.splice(0).forEach(stop => { try { stop(); } catch (e) { console.warn(e); } });
   const token = ++routeToken, holder = h('div', {}, loading());
   view.replaceChildren(holder); scrollTo(0, 0);
-  try { await PAGES[page](holder, () => token === routeToken); }
+  try { await PAGES[page](holder, () => token === routeToken, stop => { if (token === routeToken) leaveWork.push(stop); else stop(); }); }
   catch (e) { console.error(e); if (token === routeToken) holder.replaceChildren(h('div.note.danger', {}, friendly(e))); }
 }
 
@@ -258,7 +262,7 @@ async function dashboard(v, live) {
       h('div.card.stack', {}, h('div.row.between', {}, h('h2', {}, 'Forms waiting'), h('button.btn.small', { onclick: () => go('forms') }, 'See all')),
         recent.length ? h('div.list', {}, recent.map(a => h('div.item', {}, avatar(a.name), h('div.grow', {}, h('div.name', {}, a.name || 'Player'), h('div.faint.mono', {}, showId(a.id))), h('span.tag.y', {}, 'pending')))) : empty('Koi form pending nahi hai.')),
       h('div.stack', {},
-        h('div.card.stack', {}, h('h2', {}, 'Quick actions'), h('div.row', {}, h('button.btn.gold', { onclick: () => go('gift') }, icon('gift'), 'Send gift'), h('button.btn', { onclick: () => go('notify') }, icon('bell'), 'Notification'), h('button.btn', { onclick: () => go('partners') }, icon('crown'), 'Add partner'))),
+        h('div.card.stack', {}, h('h2', {}, 'Quick actions'), h('div.row', {}, h('button.btn.gold', { onclick: () => go('gift') }, icon('gift'), 'Send gift'), h('button.btn', { onclick: () => go('notify') }, icon('bell'), 'Notification'), h('button.btn', { onclick: () => go('analytics') }, icon('chart'), 'Analytics'), h('button.btn', { onclick: () => go('support') }, icon('help'), 'Support'), h('button.btn', { onclick: () => go('partners') }, icon('crown'), 'Add partner'))),
         h('div.card.stack', {}, h('h2', {}, 'Last actions'), logs.length ? h('div.list', {}, logs.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.faint', {}, whenText(l.at)))))) : h('p.faint', {}, 'Abhi kuch nahi.')))));
 }
 
@@ -380,7 +384,8 @@ async function revoke(kind, id) {
   await b.commit();
   await logDo(kind === 'creators' ? 'Creator removed' : 'Partner title removed', showId(id));
 }
-async function people(v, kind, live = () => true) {
+async function people(v, kind) {
+  const live = () => true;
   const creators = kind === 'creators', coll = creators ? 'wow_creators' : 'partners', word = creators ? 'Creator' : 'Partner';
   const rows = await docs(fb.query(col(coll), fb.limit(500)));
   const info = await names(rows.map(r => r.id));
@@ -601,6 +606,190 @@ async function activity(v, live) {
   v.replaceChildren(head('Activity Log', 'Panel se jo bhi hua, sab yahan likha rehta hai.'), h('div.card', {}, rows.length ? h('div.list', {}, rows.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.muted', { style: 'overflow-wrap:anywhere' }, l.detail || '')), h('span.faint', {}, whenText(l.at))))) : empty('Abhi kuch nahi hua.')));
 }
 
+// ------------------------------------------------------------------ analytics
+// A day runs on India time, the same as in the game. Finished days never change, so they are kept in this browser.
+const IST = 330 * 60000;
+const istDate = (back = 0) => new Date(Date.now() + IST - back * 86400000);
+const dayKey = (back = 0) => { const d = istDate(back); return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`; };
+const dayLabel = key => new Date(Date.UTC(+key.slice(0, 4), +key.slice(4, 6) - 1, +key.slice(6))).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const num = n => n === null || n === undefined ? '-' : Number(n).toLocaleString('en-IN');
+function hours(sec) {
+  const s = Number(sec) || 0; if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : `${m}m`;
+}
+const EMPTY_DAY = { players: 0, seconds: 0, sessions: 0, races: 0, fresh: 0, rewarded: 0, interstitial: 0, banner: 0, native: 0 };
+async function totals(path) {
+  const c = col(path);
+  const [a, b] = await Promise.all([
+    fb.getAggregateFromServer(c, { players: fb.count(), seconds: fb.sum('seconds'), sessions: fb.sum('sessions'), races: fb.sum('races'), fresh: fb.sum('new') }),
+    fb.getAggregateFromServer(c, { rewarded: fb.sum('rewarded'), interstitial: fb.sum('interstitial'), banner: fb.sum('banner'), native: fb.sum('native') })]);
+  return { ...a.data(), ...b.data() };
+}
+async function dayTotals(key, today) {
+  const cacheKey = `hippoAdmin.day.${key}`;
+  if (!today) { try { const c = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (c) return c; } catch { /* read it again */ } }
+  const t = await totals(`stats_days/${key}/players`);
+  if (key < dayKey(1)) { try { localStorage.setItem(cacheKey, JSON.stringify(t)); } catch { /* full */ } }
+  return t;
+}
+const addUp = list => list.reduce((s, d) => { for (const k of Object.keys(EMPTY_DAY)) s[k] += d[k] || 0; return s; }, { ...EMPTY_DAY });
+const adsOf = d => (d.rewarded || 0) + (d.interstitial || 0) + (d.banner || 0) + (d.native || 0);
+const regionNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+const countryName = c => { if (!c || c === 'XX') return 'Unknown'; try { return regionNames ? regionNames.of(c) : c; } catch { return c; } };
+const flag = c => !c || c === 'XX' || !/^[A-Z]{2}$/.test(c) ? '🌍' : String.fromCodePoint(...[...c].map(x => 127397 + x.charCodeAt(0)));
+
+/** One measure over the last 30 days: bars from a common zero, the value on hover or tap, and the same numbers as a table. */
+function dayChart(days, metric) {
+  const value = d => metric.get(d.t), most = Math.max(1, ...days.map(value));
+  const top = (() => { const want = most / 4, p = 10 ** Math.floor(Math.log10(want)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= want) return (metric.whole ? Math.max(Math.ceil(m * p), 1) : m * p) * 4; return most; })();
+  const tip = h('div.tip', { hidden: true, role: 'status' });
+  const plot = h('div.plot', {}, [4, 3, 2, 1, 0].map(i => h('div.gridline', { style: `bottom:${i * 25}%` }, h('span', {}, metric.axis(top * i / 4)))),
+    h('div.bars', {}, days.map(d => {
+      const v = value(d), show = () => { tip.hidden = false; tip.replaceChildren(h('b', {}, metric.text(v)), h('span', {}, `${metric.name} · ${dayLabel(d.key)}`)); };
+      return h('button.barhit', { 'aria-label': `${dayLabel(d.key)}: ${metric.text(v)} ${metric.name}`, onmouseenter: show, onfocus: show, onclick: show, onmouseleave: () => { tip.hidden = true; } },
+        h('i', { style: `height:${v ? Math.max(v / top * 100, 1.5) : 0}%` }));
+    })));
+  const axis = h('div.xaxis', {}, days.map((d, i) => h('span', {}, i % 5 === 4 || i === days.length - 1 ? dayLabel(d.key) : '')));
+  const table = h('details.datatable', {}, h('summary', {}, 'Show as table'), h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Day'), h('th.n', {}, metric.name))),
+    h('tbody', {}, [...days].reverse().map(d => h('tr', {}, h('td', {}, dayLabel(d.key)), h('td.n', {}, metric.text(value(d)))))))));
+  return h('div.chart', {}, h('div.tipwrap', {}, tip), plot, axis, table);
+}
+
+async function analytics(v, live, onLeave) {
+  const stamp = h('span.faint', {}, 'Updating...');
+  const tiles = h('div.stats'), adsBox = h('div.card.stack'), trend = h('div.card.stack'), geo = h('div.card.stack'), top = h('div.card.stack'), health = h('div.card.stack'), now = h('div.card.stack');
+  v.replaceChildren(head('Analytics', 'Game ka poora data, live.', h('div.row', {}, h('span.livepill', {}, h('i'), 'LIVE'), stamp)),
+    h('div.note', { style: 'margin-bottom:14px' }, 'Ads, time, country aur top players ka data naye game update se aana shuru hoga. Din India time se chalta hai.'),
+    tiles, h('div.two', { style: 'margin-bottom:16px' }, trend, adsBox), h('div.two', { style: 'margin-bottom:16px' }, geo, h('div.stack', {}, health, now)), top);
+
+  let days = [], metricId = 'players', geoTab = 'today', sortBy = 'seconds';
+  const METRICS = {
+    players: { name: 'Players', whole: true, get: d => d.players, text: num, axis: x => num(Math.round(x)) },
+    fresh: { name: 'New players', whole: true, get: d => d.fresh, text: num, axis: x => num(Math.round(x)) },
+    ads: { name: 'Ads seen', whole: true, get: adsOf, text: num, axis: x => num(Math.round(x)) },
+    hours: { name: 'Hours played', get: d => d.seconds / 3600, text: x => x.toFixed(1), axis: x => (x < 10 ? x.toFixed(1) : num(Math.round(x))) },
+    races: { name: 'Races', whole: true, get: d => d.races, text: num, axis: x => num(Math.round(x)) },
+  };
+  function drawTrend() {
+    trend.replaceChildren(h('h2', {}, 'Last 30 days'), h('div.tabs', { style: 'margin:0' }, Object.entries(METRICS).map(([k, m]) => h('button.tab', { class: metricId === k ? 'on' : '', onclick: () => { metricId = k; drawTrend(); } }, m.name))), days.length ? dayChart(days.slice(-30), METRICS[metricId]) : loading());
+  }
+  async function drawGeo() {
+    const path = { today: `stats_days/${dayKey()}/dims`, month: `stats_months/${dayKey().slice(0, 6)}/dims`, all: 'stats_all' }[geoTab];
+    const rows = (await docs(fb.query(col(path), fb.limit(260)))).filter(x => x.id.startsWith('c_')).map(x => ({ c: x.id.slice(2), n: x.n || 0 })).sort((a, b) => b.n - a.n);
+    if (!live()) return;
+    const sum = rows.reduce((s, r) => s + r.n, 0), big = rows[0]?.n || 1;
+    geo.replaceChildren(h('h2', {}, 'Countries'), h('div.tabs', { style: 'margin:0' }, [['today', 'Today'], ['month', 'This month'], ['all', 'All time']].map(([k, l]) => h('button.tab', { class: geoTab === k ? 'on' : '', onclick: act(async () => { geoTab = k; await drawGeo(); }) }, l))),
+      rows.length ? h('div.meters', {}, rows.slice(0, 15).map(r => h('div.meter', {}, h('span.mflag', { 'aria-hidden': 'true' }, flag(r.c)), h('span.mname', {}, countryName(r.c)), h('span.track', {}, h('i', { style: `width:${Math.max(r.n / big * 100, 2)}%` })), h('b.mono', {}, num(r.n)), h('span.faint.mono.pct', {}, `${Math.round(r.n / sum * 100)}%`)))) : empty('Abhi data nahi aaya.'));
+  }
+  async function drawTop() {
+    const rows = await docs(fb.query(col('stats_players'), fb.orderBy(sortBy, 'desc'), fb.limit(25)));
+    if (!live()) return;
+    top.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Top players'), h('div.tabs', { style: 'margin:0' }, [['seconds', 'Most hours'], ['ads', 'Most ads'], ['races', 'Most races']].map(([k, l]) => h('button.tab', { class: sortBy === k ? 'on' : '', onclick: act(async () => { sortBy = k; await drawTop(); }) }, l)))),
+      rows.length ? h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, ['#', 'Player', 'Country'].map(x => h('th', {}, x)), ['Hours', 'Ads', 'Races', 'Sessions', 'Level'].map(x => h('th.n', {}, x)), h('th', {}, 'Last seen'))),
+        h('tbody', {}, rows.map((u, i) => h('tr.link', { tabindex: 0, onclick: () => go('players', { id: u.id }), onkeydown: e => { if (e.key === 'Enter') go('players', { id: u.id }); } },
+          h('td.mono', {}, i + 1), h('td', {}, h('div.name', {}, u.name || 'Player'), h('div.faint.mono', {}, showId(u.id))), h('td', {}, `${flag(u.country)} ${countryName(u.country)}`),
+          h('td.n.mono', {}, hours(u.seconds)), h('td.n.mono', {}, num(u.ads || 0)), h('td.n.mono', {}, num(u.races || 0)), h('td.n.mono', {}, num(u.sessions || 0)), h('td.n.mono', {}, u.level || '-'), h('td.faint', {}, agoText(u.lastAt))))))) : empty('Abhi data nahi aaya.'));
+  }
+  async function drawNow() {
+    const since = String(Math.floor(Date.now() / 1000) - 100);
+    const rows = await docs(fb.query(col('users'), fb.where('seen', '>=', since), fb.orderBy('seen', 'desc'), fb.limit(12)));
+    if (!live()) return;
+    const on = rows.filter(u => u.state !== 'off');
+    now.replaceChildren(h('h2', {}, 'Playing now'), on.length ? h('div.list', {}, on.map(u => h('div.item', {}, avatar(u.name), h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint', {}, u.state === 'race' ? `Racing ${u.river || ''}` : 'On home screen')), h('span.tag', { class: u.state === 'race' ? 'g' : 'b' }, u.state === 'race' ? 'race' : 'home')))) : empty('Abhi koi online nahi.'));
+  }
+  async function refresh(full) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const [liveCount, today, all, month, users] = await Promise.all([
+      count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec - 100)))), dayTotals(dayKey(), true), totals('stats_players'),
+      count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
+    if (!live()) return;
+    if (full) {
+      const keys = Array.from({ length: 31 }, (_, i) => dayKey(30 - i));   // a whole month, whatever the date
+      const got = await Promise.all(keys.map(k => k === dayKey() ? today : dayTotals(k, k >= dayKey(1)).catch(() => ({ ...EMPTY_DAY }))));
+      days = keys.map((key, i) => ({ key, t: got[i] }));
+    } else if (days.length) days[days.length - 1].t = today;
+    if (!live()) return;
+    const tile = (n, label, c, sub) => h('div.stat.flat', { style: `--c:${c}` }, h('b', {}, n), h('span', {}, label), sub ? h('small', {}, sub) : null);
+    tiles.replaceChildren(tile(num(liveCount), 'Live now', 'var(--green)', 'last 100 seconds'), tile(num(today.players), 'Played today', 'var(--blue)'), tile(num(month), 'Played this month', 'var(--pink)'), tile(num(today.fresh), 'New today', '#5ce0d8'),
+      tile(num(users), 'Total players', 'var(--gold)'), tile(hours(today.players ? today.seconds / today.players : 0), 'Avg time today', 'var(--gold)', 'per player'), tile(num(today.races), 'Races today', 'var(--blue)'), tile(num(adsOf(today)), 'Ads today', 'var(--green)', today.players ? `${(adsOf(today) / today.players).toFixed(1)} per player` : ''));
+    const yesterday = days.length > 1 ? days[days.length - 2].t : EMPTY_DAY, week = addUp(days.slice(-7).map(d => d.t)), thisMonth = addUp(days.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).map(d => d.t));
+    const cols = [today, yesterday, week, thisMonth, all];
+    adsBox.replaceChildren(h('h2', {}, 'Ads seen'), h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Type'), ['Today', 'Yesterday', '7 days', 'Month', 'All time'].map(x => h('th.n', {}, x)))),
+      h('tbody', {}, [['Rewarded', 'rewarded'], ['Interstitial', 'interstitial'], ['Banner', 'banner'], ['Native Advanced', 'native']].map(([l, k]) => h('tr', {}, h('td', {}, l), cols.map(c => h('td.n.mono', {}, num(c[k] || 0))))), h('tr.total', {}, h('td', {}, 'Total'), cols.map(c => h('td.n.mono', {}, num(adsOf(c)))))))),
+      h('p.faint', {}, 'Game me ad dikhne par count hota hai. Earnings ke liye AdMob hi sahi number hai.'));
+    drawTrend();
+    stamp.textContent = `Updated ${new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+  }
+  async function drawHealth() {
+    const rate = async back => {
+      const start = dayKey(back), base = await dayTotals(start, back <= 1).catch(() => null);
+      if (!base || !base.fresh) return null;
+      const n = await count(fb.query(col(`stats_days/${dayKey(0)}/players`), fb.where('firstDay', '==', Number(start))));
+      return n === null ? null : Math.round(n / base.fresh * 100);
+    };
+    const [d1, d7, versions] = await Promise.all([rate(1), rate(7), docs(fb.query(col(`stats_days/${dayKey()}/dims`), fb.limit(260))).catch(() => [])]);
+    if (!live()) return;
+    const vs = versions.filter(x => x.id.startsWith('v_')).map(x => ({ v: x.id.slice(2), n: x.n || 0 })).sort((a, b) => b.n - a.n);
+    health.replaceChildren(h('h2', {}, 'Players coming back'), h('div.fields', { style: 'grid-template-columns:1fr 1fr' },
+      h('div.mini-stat', {}, h('b', {}, d1 === null ? '-' : `${d1}%`), h('span', {}, 'Day 1'), h('small', {}, 'kal ke naye players aaj wapas aaye')), h('div.mini-stat', {}, h('b', {}, d7 === null ? '-' : `${d7}%`), h('span', {}, 'Day 7'), h('small', {}, '7 din pehle ke naye players aaj aaye'))),
+      h('div.lab', {}, 'Game versions today'), vs.length ? h('div.chips', {}, vs.slice(0, 6).map(x => h('span.tag.p', {}, `v${x.v}: ${num(x.n)}`))) : h('p.faint', {}, 'Abhi data nahi aaya.'));
+  }
+  await refresh(true);
+  await Promise.all([drawGeo(), drawTop(), drawNow(), drawHealth()]);
+  let tick = 0, busy = false;
+  const timer = setInterval(async () => {
+    if (document.hidden || busy || !live()) return;
+    busy = true; tick++;
+    try { await refresh(false); if (tick % 3 === 0) await drawNow(); if (tick % 15 === 0) await Promise.all([drawGeo(), drawTop(), drawHealth()]); } catch (e) { console.warn(e); stamp.textContent = 'Connection lost, retrying...'; }
+    busy = false;
+  }, 20000);
+  onLeave(() => clearInterval(timer));
+}
+
+// ------------------------------------------------------------------ help and support
+const TOPIC_TAG = { BUG: 'r', PAYMENT: 'y', ADS: 'b', ACCOUNT: 'p', IDEA: 'g', OTHER: '' };
+async function support(v, live, onLeave) {
+  let rows = [], tab = 'open', topic = 'ALL', firstLoad = true;
+  const replies = {};
+  const tabs = h('div.tabs'), topics = h('div.chips', { style: 'margin-bottom:14px' }), grid = h('div.grid', { style: 'grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr))' });
+  v.replaceChildren(head('Help & Support', 'Players ke messages seedha yahan aate hain. Reply unke game MAIL me jata hai.', h('span.livepill', {}, h('i'), 'LIVE')), tabs, topics, grid);
+  function card(t) {
+    const box = h('textarea', { id: `reply-${t.id}`, rows: 3, maxlength: MAX_MESSAGE, placeholder: 'Apna reply likho...', value: replies[t.id] || '', 'aria-label': 'Reply', oninput: e => { replies[t.id] = e.target.value; } });
+    const info = [['Player ID', showId(t.uid)], ['Country', `${flag(t.country)} ${countryName(t.country)}`], ['Level', t.level || '-'], ['Game', `v${t.version || '-'}`], ['Phone', t.device || '-'], ['System', t.os || '-'], ['Language', t.language || '-'], ['Hippo Pass', t.pass || '-'], ['Screen', t.screen || '-']];
+    const send = act(async () => {
+      const words = box.value.trim(); if (!words) return toast('Reply likho.', true);
+      const b = fb.writeBatch(db);
+      b.set(fb.doc(col('mail')), { to: t.uid, title: 'Reply from Support', message: words.slice(0, MAX_MESSAGE), push: 'Support replied to your message. Open MAIL!', sentAt: fb.serverTimestamp(), sentBy: 'admin' });
+      b.update(ref('support', t.id), { status: 'replied', reply: words.slice(0, MAX_MESSAGE), repliedAt: fb.serverTimestamp() });
+      await b.commit(); await logDo('Support reply sent', `${t.name || 'Player'} (${showId(t.uid)})`); delete replies[t.id]; toast('Reply player ke MAIL me chala gaya');
+    });
+    const setStatus = (status, msg) => act(async () => { await fb.updateDoc(ref('support', t.id), { status }); await logDo(`Support ${status}`, showId(t.uid)); toast(msg); });
+    return h('div.card.stack', {}, h('div.row', {}, avatar(t.name), h('div.grow', {}, h('div.name', {}, t.name || 'Player'), h('div.faint', {}, whenText(t.at))), h('span.tag', { class: TOPIC_TAG[t.topic] || '' }, t.topic || 'OTHER'), h('span.tag', { class: { open: 'y', replied: 'g', closed: '' }[t.status] }, t.status)),
+      h('div.ticket', {}, t.message || ''), h('dl.details', {}, info.map(([k, x]) => h('div', {}, h('dt', {}, k), h('dd', {}, x)))),
+      t.reply ? h('div.note', {}, h('b', {}, 'Your reply: '), t.reply) : null, t.status !== 'closed' ? box : null,
+      h('div.row', {}, t.status !== 'closed' ? h('button.btn.go', { onclick: send }, t.reply ? 'Send again' : 'Send reply') : null, t.status !== 'closed' ? h('button.btn', { onclick: setStatus('closed', 'Close ho gaya') }, 'Close') : h('button.btn', { onclick: setStatus('open', 'Dobara open') }, 'Reopen'), h('button.btn.small.ghost', { onclick: () => go('players', { id: t.uid }) }, 'Open player'),
+        h('button.btn.small.bad', { 'aria-label': 'Delete message', onclick: act(async () => { if (!await ask({ title: 'Message delete karein?', yes: 'Delete', danger: true })) return; await fb.deleteDoc(ref('support', t.id)); await logDo('Support deleted', showId(t.uid)); toast('Delete ho gaya'); }) }, icon('trash'))));
+  }
+  function draw() {
+    const n = k => rows.filter(t => k === 'all' || t.status === k).length;
+    tabs.replaceChildren(...[['open', 'New'], ['replied', 'Replied'], ['closed', 'Closed'], ['all', 'All']].map(([k, l]) => h('button.tab', { class: tab === k ? 'on' : '', onclick: () => { tab = k; draw(); } }, `${l} (${n(k)})`)));
+    topics.replaceChildren(...['ALL', 'BUG', 'PAYMENT', 'ADS', 'ACCOUNT', 'IDEA', 'OTHER'].map(k => h('button.chip', { class: topic === k ? 'ok' : '', onclick: () => { topic = k; draw(); } }, k)));
+    const shown = rows.filter(t => (tab === 'all' || t.status === tab) && (topic === 'ALL' || t.topic === topic));
+    const focusId = document.activeElement?.id;
+    grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div.card', { style: 'grid-column:1/-1' }, empty(tab === 'open' ? 'Koi naya message nahi.' : 'Yahan kuch nahi.'))]));
+    if (focusId) document.getElementById(focusId)?.focus();
+  }
+  grid.replaceChildren(loading());
+  const stop = fb.onSnapshot(fb.query(col('support'), fb.orderBy('at', 'desc'), fb.limit(300)), snap => {
+    if (!live()) return;
+    const added = snap.docChanges().filter(c => c.type === 'added').length;
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!firstLoad && added) toast('Naya support message aaya!');
+    firstLoad = false; draw(); refreshBadge();
+  }, e => { console.error(e); grid.replaceChildren(h('div.note.danger', {}, friendly(e))); });
+  onLeave(stop);
+}
+
 // ------------------------------------------------------------------ start
 function start() {
   const config = emulator ? { apiKey: 'demo-key', authDomain: 'localhost', projectId: new URLSearchParams(location.search).get('project') || 'demo-raft' } : readConfig();
@@ -612,7 +801,7 @@ function start() {
   } catch (e) { localStorage.removeItem(CONFIG_KEY); toast(friendly(e), true); return setupScreen(); }
   fb.onAuthStateChanged(auth, async user => {
     me = user;
-    if (!user) { window.onhashchange = null; return loginScreen(); }
+    if (!user) { leaveWork.splice(0).forEach(stop => stop()); routeToken++; window.onhashchange = null; return loginScreen(); }
     try {
       const s = await fb.getDoc(ref('admins', user.uid));
       if (s.exists()) shell(); else notAdminScreen();
