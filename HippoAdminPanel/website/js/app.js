@@ -618,12 +618,13 @@ function hours(sec) {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : `${m}m`;
 }
 const EMPTY_DAY = { players: 0, seconds: 0, sessions: 0, races: 0, fresh: 0, rewarded: 0, interstitial: 0, banner: 0, native: 0 };
+// One measure per query: several sums in one query would need a custom Firestore index for every combination.
+const SUMS = { seconds: 'seconds', sessions: 'sessions', races: 'races', fresh: 'new', rewarded: 'rewarded', interstitial: 'interstitial', banner: 'banner', native: 'native' };
 async function totals(path) {
-  const c = col(path);
-  const [a, b] = await Promise.all([
-    fb.getAggregateFromServer(c, { players: fb.count(), seconds: fb.sum('seconds'), sessions: fb.sum('sessions'), races: fb.sum('races'), fresh: fb.sum('new') }),
-    fb.getAggregateFromServer(c, { rewarded: fb.sum('rewarded'), interstitial: fb.sum('interstitial'), banner: fb.sum('banner'), native: fb.sum('native') })]);
-  return { ...a.data(), ...b.data() };
+  const c = col(path), players = (await fb.getCountFromServer(c)).data().count;
+  if (!players) return { ...EMPTY_DAY };   // nobody that day: one read instead of nine
+  const got = await Promise.all(Object.entries(SUMS).map(async ([key, field]) => [key, (await fb.getAggregateFromServer(c, { v: fb.sum(field) })).data().v || 0]));
+  return { ...EMPTY_DAY, players, ...Object.fromEntries(got) };
 }
 async function dayTotals(key, today) {
   const cacheKey = `hippoAdmin.day.${key}`;
@@ -697,11 +698,15 @@ async function analytics(v, live, onLeave) {
     const on = rows.filter(u => u.state !== 'off');
     now.replaceChildren(h('h2', {}, 'Playing now'), on.length ? h('div.list', {}, on.map(u => h('div.item', {}, avatar(u.name), h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint', {}, u.state === 'race' ? `Racing ${u.river || ''}` : 'On home screen')), h('span.tag', { class: u.state === 'race' ? 'g' : 'b' }, u.state === 'race' ? 'race' : 'home')))) : empty('Abhi koi online nahi.'));
   }
-  async function refresh(full) {
+  let held = null;   // the totals: read once a minute; the live number every 20 seconds
+  async function refresh(full, heavy = true) {
     const nowSec = Math.floor(Date.now() / 1000);
-    const [liveCount, today, all, month, users] = await Promise.all([
-      count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec - 100)))), dayTotals(dayKey(), true), totals('stats_players'),
-      count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
+    const liveWait = count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec - 100))));
+    if (heavy || !held) {
+      const [t, a, m, u] = await Promise.all([dayTotals(dayKey(), true), totals('stats_players'), count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
+      held = { today: t, all: a, month: m, users: u };
+    }
+    const liveCount = await liveWait, { today, all, month, users } = held;
     if (!live()) return;
     if (full) {
       const keys = Array.from({ length: 31 }, (_, i) => dayKey(30 - i));   // a whole month, whatever the date
@@ -740,7 +745,7 @@ async function analytics(v, live, onLeave) {
   const timer = setInterval(async () => {
     if (document.hidden || busy || !live()) return;
     busy = true; tick++;
-    try { await refresh(false); if (tick % 3 === 0) await drawNow(); if (tick % 15 === 0) await Promise.all([drawGeo(), drawTop(), drawHealth()]); } catch (e) { console.warn(e); stamp.textContent = 'Connection lost, retrying...'; }
+    try { await refresh(false, tick % 3 === 0); if (tick % 3 === 0) await drawNow(); if (tick % 15 === 0) await Promise.all([drawGeo(), drawTop(), drawHealth()]); } catch (e) { console.warn(e); stamp.textContent = 'Connection lost, retrying...'; }
     busy = false;
   }, 20000);
   onLeave(() => clearInterval(timer));
