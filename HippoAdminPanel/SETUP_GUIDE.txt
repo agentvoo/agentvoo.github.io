@@ -1,0 +1,81 @@
+HIPPO RAFT RUSH - ADMIN PANEL SETUP
+===================================
+Ye sab sirf EK BAAR karna hai (10-15 minute). Uske baad Firebase kholne ki zaroorat nahi.
+
+ZIP ME KYA HAI
+  website/          ye GitHub pe upload hoga
+  firestore.rules   Firebase ke naye rules (GitHub pe MAT daalna)
+  SETUP_GUIDE.txt   ye file
+
+STEP 1 - WEB APP BANAO
+  1. console.firebase.google.com > project fart2-d0d9f
+  2. Upar left gear icon > Project settings
+  3. Neeche "Your apps" > "Add app" > Web icon </>
+  4. Naam: Admin Panel. "Firebase Hosting" pe tick MAT karo. Register app.
+  5. Jo firebaseConfig dikhe usko copy karke rakh lo (Step 6 me chahiye).
+
+STEP 2 - GOOGLE LOGIN ON KARO
+  Firebase > Build > Authentication > Get started > Sign-in method > Google > Enable
+  Support email chuno > Save.
+
+STEP 3 - GITHUB WEBSITE KO ALLOW KARO
+  Authentication > Settings > Authorized domains > Add domain
+  Likho: TUMHARA-GITHUB-USERNAME.github.io
+
+STEP 4 - NAYE RULES DEPLOY KARO
+  Game ke project me rules pehle se update hain. Terminal me:
+      cd ~/Downloads/RaftParty_Game/RaftGame_Assets/RaftParty_UnityProject/Firebase
+      firebase deploy --only firestore:rules --project fart2-d0d9f
+  (Ya Firebase > Firestore > Rules me firestore.rules ka pura text paste karke Publish.)
+  Isse game ko koi farak nahi padta.
+
+STEP 5 - GITHUB PE HOSTING
+  1. github.com > New repository. Naam: hippo-admin. Public rakho
+     (free GitHub me private repo pe Pages nahi chalta). Create.
+  2. "uploading an existing file" > website folder ke ANDAR ki saari files drag karo
+     (index.html bahar hi dikhna chahiye). Commit changes.
+     Dhyan: .nojekyll hidden file hai; na dikhe to bhi site chal jayegi.
+  3. Repo > Settings > Pages > Branch: main, folder / (root) > Save.
+  4. 1-2 minute baad link milega: https://USERNAME.github.io/hippo-admin/
+
+  Link public ho to bhi tension nahi: bina admin wale Google account se kuch nahi khulta.
+  Website me koi password ya secret key nahi hai.
+
+STEP 6 - PEHLI BAAR LOGIN
+  1. Link kholo > firebaseConfig paste karo > SAVE.
+  2. LOGIN WITH GOOGLE.
+  3. "Bas ek last step" screen pe ek code dikhega. Copy karo.
+  4. Firebase > Firestore > + Start collection
+        Collection ID:  admins
+        Document ID:    wahi code
+        Field: role  (string) = owner   > Save
+  5. Panel me "HO GAYA, CHECK KARO" dabao. Panel khul gaya!
+
+  Kisi aur ko admin banana ho: wo login kare, apna code bheje, tum admins me uska document banao.
+  Admin hatana ho: admins se uska document delete karo. Panel khud kisi ko admin nahi bana sakta.
+
+PANEL ME KYA KYA HAI
+  Dashboard       players, forms, creators, partners, reports ki ginti
+  Send Gift/Mail  Pearls, Bubbles, Level, Rank: ek ID, bohot IDs, Creators, Partners ya Everyone
+  Notification    apne likhe text ka notification
+  Sent Mail       kya bheja, kitno ne collect kiya, delete
+  Creator Forms   kisne form bhara, jawab, APPROVE / DENY / dobara apply
+  Creators        add / remove
+  Partners        Partner title do / hatao
+  Players         ID ya naam se dhoondo, gift, creator, partner, photo hatao / ban
+  Rivers          sab rivers, comments, delete
+  Reports         river, comment aur photo reports
+  Game Settings   force update, What's new, ranked season date
+  Activity Log    panel se jo bhi hua
+
+NOTIFICATION KE BAARE ME
+  - 1 se 15 minute me aata hai (phone so raha ho to thoda late).
+  - Player ne game ek baar khola ho aur notification allow ki ho tabhi aata hai.
+  - Apna likha text sirf NAYE game update me dikhega. Purane version pe wahi
+    "Check your mail! A surprise is waiting" dikhega, aur mail dono ko milta hai.
+  - Notification ke saath wahi message player ke MAIL me bhi aata hai.
+
+GALTI SE BACHNA
+  - Everyone ko bhejne se pehle SEND likhna padta hai.
+  - Mail bheja aur player ne collect kar liya to wapas nahi hota.
+  - Force update tabhi lagao jab wo version Google Play pe live ho, warna log game nahi khol payenge.

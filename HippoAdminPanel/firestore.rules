@@ -1,0 +1,220 @@
+rules_version = '2';
+// Rooms only hold what two phones need to find each other: the 4-letter code, the river,
+// who is in the room, and the WebRTC offer/answer. The race and voice go phone to phone.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function small() {
+      return request.resource.data.keys().size() <= 12;
+    }
+    // The admin panel (website): signed in with Google, and that Google account has a document admins/{its auth uid}.
+    // Phones never sign in, so for them this is simply false and costs no extra read.
+    function isAdmin() {
+      return request.auth != null && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    // Who may use the admin panel. Added by hand in the Firebase console only; the panel itself can never add an admin.
+    match /admins/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+    // What was done in the admin panel, newest first. Never edited.
+    match /admin_log/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+    // One document, config/app, says which version must update. Players only read it; it is edited in the console.
+    match /config/{doc} {
+      allow get: if true;
+      allow list, write: if isAdmin();
+    }
+    // Ranked: one document per player and season, ranked_s{season}/{player id}, read by everyone for the top 100.
+    match /{season}/{uid} {
+      allow get, list: if season.matches('^ranked_s[0-9]+$');
+      allow create, update: if season.matches('^ranked_s[0-9]+$') && uid.matches('^[1-9][0-9]{7}$') && small()
+        && request.resource.data.get('name', '').size() <= 40 && request.resource.data.get('score', '').matches('^[0-9]{7}$');
+      allow delete: if false;
+    }
+    // Official partners and creators: a document partners/{player id} gives that player the
+    // "Hippo Raft Rush Official Partner" title. Phones only read their own; it is added in the console.
+    match /partners/{uid} {
+      allow get: if uid.matches('^[1-9][0-9]{7}$');
+      allow list, write: if isAdmin();
+    }
+    // Profile photos from the gallery, seen by everyone: photos/{player id} with pic (a small JPEG in base64, "" for none)
+    // and at. A player in photo_bans (added in the console) can't set one. Reports go to photo_reports for the console.
+    match /photos/{uid} {
+      allow get: if uid.matches('^[1-9][0-9]{7}$');
+      allow create, update: if uid.matches('^[1-9][0-9]{7}$')
+        && !exists(/databases/$(database)/documents/photo_bans/$(uid))
+        && request.resource.data.keys().hasOnly(['pic', 'at'])
+        && request.resource.data.pic is string && request.resource.data.pic.size() < 60000;
+      allow list: if false;
+      allow delete: if isAdmin();
+    }
+    match /photo_bans/{uid} {
+      allow read, write: if isAdmin();
+    }
+    match /photo_reports/{report} {
+      allow create: if report.matches('^[1-9][0-9]{7}_[1-9][0-9]{7}$')
+        && request.resource.data.keys().hasOnly(['target', 'by', 'at'])
+        && request.resource.data.target.matches('^[1-9][0-9]{7}$');
+      allow read, delete: if isAdmin();
+      allow update: if false;
+    }
+    // The player's progress (Pearls, Bubbles, shop items, look, ranked, stats, settings) as one string, saves/{player id},
+    // so deleting the game and installing it again brings it back. Phones read and write their own; nobody lists them.
+    match /saves/{uid} {
+      allow get: if uid.matches('^[1-9][0-9]{7}$');
+      allow create, update: if uid.matches('^[1-9][0-9]{7}$')
+        && request.resource.data.keys().hasOnly(['data', 'at', 'v'])
+        && request.resource.data.data is string && request.resource.data.data.size() < 200000;
+      allow list, delete: if false;
+    }
+    // Mail from "Hippo Raft Rush Official", written only in the console: mail/{any id} with to (a player id, or
+    // partners, creators or all), title, message, pearls, bubbles. Phones read it; nobody can write it from a phone.
+    match /mail/{id} {
+      allow get, list: if true;
+      allow write: if isAdmin();
+    }
+    // A gift collected: mail_claims/{mail id}_{player id}, written once and never changed, so each gift is taken once.
+    match /mail_claims/{claim} {
+      allow get: if claim.matches('^[A-Za-z0-9_-]{1,60}_[1-9][0-9]{7}$');
+      allow create: if claim.matches('^[A-Za-z0-9_-]{1,60}_[1-9][0-9]{7}$')
+        && request.resource.data.keys().hasOnly(['at']);
+      allow list: if isAdmin();
+      allow update, delete: if false;
+    }
+    // Players and their friends. A player is an 8 digit id; each has a profile (name, look, last seen, at home or which river),
+    // a list of friends and an inbox of friend requests and crew invites. Phones poll these; nothing is listed across players.
+    match /users/{uid} {
+      function id(x) { return x.matches('^[1-9][0-9]{7}$'); }
+      allow get: if id(uid);
+      allow list: if isAdmin();
+      allow create, update: if id(uid) && small()
+        && request.resource.data.get('name', '').size() <= 40;
+      allow delete: if false;
+
+      match /friends/{friend} {
+        allow read: if id(uid);
+        allow create, update: if id(uid) && id(friend) && small();
+        allow delete: if true;
+      }
+      match /inbox/{item} {
+        allow read: if id(uid);
+        allow create, update: if id(uid) && small()
+          && request.resource.data.kind in ['friend', 'invite', 'accepted', 'removed', 'reply']
+          && id(request.resource.data.from)
+          && request.resource.data.get('name', '').size() <= 40;
+        allow delete: if true;
+      }
+    }
+
+    // Which player id a phone had, so deleting and installing the game again keeps the id. The key is a hash of the
+    // phone's own id. Written once, never changed, so nobody can point someone else's phone at another id.
+    match /devices/{device} {
+      allow get: if device.matches('^[0-9a-f]{64}$');
+      allow list, update, delete: if false;
+      allow create: if device.matches('^[0-9a-f]{64}$')
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid.matches('^[1-9][0-9]{7}$');
+    }
+
+    // WOW RACE: rivers made by players. A player asks once (wow_apply); the answers are read in the console, where
+    // adding wow_creators/{player id} lets that player publish, and setting status "denied" on the answers turns them down.
+    // Phones never change wow_apply or wow_creators after that.
+    match /wow_apply/{uid} {
+      allow get: if uid.matches('^[1-9][0-9]{7}$');
+      allow list, update, delete: if isAdmin();
+      allow create: if uid.matches('^[1-9][0-9]{7}$')
+        && request.resource.data.keys().hasOnly(['name', 'q1', 'q2', 'q3', 'q4', 'q5', 'at', 'status'])
+        && request.resource.data.status == 'pending'
+        && request.resource.data.get('name', '').size() <= 40
+        && request.resource.data.q1.size() <= 200 && request.resource.data.q2.size() <= 200 && request.resource.data.q3.size() <= 200
+        && request.resource.data.q4.size() <= 200 && request.resource.data.q5.size() <= 200;
+    }
+    match /wow_creators/{uid} {
+      allow get: if uid.matches('^[1-9][0-9]{7}$');
+      allow list, write: if isAdmin();
+    }
+    // A river's card: its id is the creator's player id and a number. Only a creator writes the card itself; anyone adds
+    // one play at a time, and one rating at a time (a rating document of their own goes with it).
+    match /wow_rivers/{rid} {
+      function creator(uid) { return exists(/databases/$(database)/documents/wow_creators/$(uid)); }
+      function mine() {
+        return rid.matches('^[1-9][0-9]{7}_[0-9]{1,2}$') && request.resource.data.uid == rid.split('_')[0] && creator(request.resource.data.uid);
+      }
+      function card() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['uid', 'creator', 'title', 'desc', 'style', 'thumb', 'plays', 'rsum', 'rcount', 'at', 'ver'])
+          && d.title.size() >= 1 && d.title.size() <= 24 && d.get('desc', '').size() <= 140 && d.get('creator', '').size() <= 40
+          && d.thumb.size() <= 150000 && d.style.matches('^[0-9]$') && d.plays.matches('^[0-9]{7}$');
+      }
+      function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      allow get, list: if true;
+      allow create: if mine() && card() && request.resource.data.plays == '0000000'
+        && request.resource.data.rsum == '0' && request.resource.data.rcount == '0';
+      allow update: if (mine() && card() && changed().hasOnly(['creator', 'title', 'desc', 'style', 'thumb', 'at', 'ver']))
+        || (changed().hasOnly(['plays']) && request.resource.data.plays.matches('^[0-9]{7}$')
+            && int(request.resource.data.plays) == int(resource.data.plays) + 1)
+        || (changed().hasOnly(['rsum', 'rcount']) && int(request.resource.data.rcount) == int(resource.data.rcount) + 1
+            && int(request.resource.data.rsum) - int(resource.data.rsum) >= 1 && int(request.resource.data.rsum) - int(resource.data.rsum) <= 5);
+      // its creator can take a river away for good (the card goes first; then its map, stars and comments can go)
+      allow delete: if (rid.matches('^[1-9][0-9]{7}_[0-9]{1,2}$') && creator(rid.split('_')[0])) || isAdmin();
+
+      match /ratings/{uid} {
+        allow read: if true;
+        allow create: if uid.matches('^[1-9][0-9]{7}$') && request.resource.data.keys().hasOnly(['stars'])
+          && request.resource.data.stars.matches('^[1-5]$');
+        allow update: if false;
+        allow delete: if !exists(/databases/$(database)/documents/wow_rivers/$(rid)) || isAdmin();
+      }
+      match /comments/{cid} {
+        allow read: if true;
+        allow create: if cid.matches('^[0-9]{13}_[1-9][0-9]{7}$')
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'text', 'at'])
+          && request.resource.data.uid == cid.split('_')[1]
+          && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 140
+          && request.resource.data.get('name', '').size() <= 40;
+        allow update: if false;
+        allow delete: if !exists(/databases/$(database)/documents/wow_rivers/$(rid)) || isAdmin();
+      }
+    }
+    // The river itself, as the editor saved it. Read when someone plays it; written with its card.
+    match /wow_maps/{rid} {
+      allow get: if true;
+      allow list: if false;
+      allow delete: if !exists(/databases/$(database)/documents/wow_rivers/$(rid)) || isAdmin();   // only once its card is gone
+      allow create, update: if rid.matches('^[1-9][0-9]{7}_[0-9]{1,2}$')
+        && request.resource.data.keys().hasOnly(['uid', 'data'])
+        && request.resource.data.uid == rid.split('_')[0]
+        && exists(/databases/$(database)/documents/wow_creators/$(request.resource.data.uid))
+        && request.resource.data.data.size() <= 60000;
+    }
+    // Reports of a river or a comment, read in the console.
+    match /wow_reports/{id} {
+      allow read, delete: if isAdmin();
+      allow update: if false;
+      allow create: if request.resource.data.keys().hasOnly(['rid', 'cid', 'uid', 'why']) && small()
+        && request.resource.data.rid.size() <= 20 && request.resource.data.get('cid', '').size() <= 40;
+    }
+
+    match /rooms/{code} {
+      allow get: if code.matches('^[A-Z]{4}$');
+      allow list: if false;
+      allow create, update: if code.matches('^[A-Z]{4}$') && small();
+      allow delete: if true;
+
+      match /peers/{peer} {
+        allow read: if true;
+        allow create, update: if small();
+        allow delete: if true;
+      }
+      match /links/{link} {
+        allow read: if true;
+        allow create, update: if small()
+          && (!('offer' in request.resource.data) || request.resource.data.offer.size() < 30000)
+          && (!('answer' in request.resource.data) || request.resource.data.answer.size() < 30000);
+        allow delete: if true;
+      }
+    }
+  }
+}
