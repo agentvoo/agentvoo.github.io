@@ -34,7 +34,7 @@ const ICONS = {
   mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-2-4-2 1-2-1-1-3H10L9 7 7 8 5 7l-2 4 2 1v2l-2 1 2 4 2-1 2 1 1 3h4l1-3 2-1 2 1 2-4-2-1z',
   log: 'M12 7v5l3 3M12 22a10 10 0 110-20 10 10 0 010 20z',
-  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2', help: 'M3 14v-2a9 9 0 0118 0v2M3 14a2 2 0 012-2h1v7H5a2 2 0 01-2-2zM21 14a2 2 0 00-2-2h-1v7h1a2 2 0 002-2zM18 19c0 2-2 3-5 3', menu: 'M3 6h18M3 12h18M3 18h18', copy: 'M9 9h12v12H9zM5 15H3V3h12v2', trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2', pulse: 'M2 12h4l3-8 4 16 3-8h6', help: 'M3 14v-2a9 9 0 0118 0v2M3 14a2 2 0 012-2h1v7H5a2 2 0 01-2-2zM21 14a2 2 0 00-2-2h-1v7h1a2 2 0 002-2zM18 19c0 2-2 3-5 3', menu: 'M3 6h18M3 12h18M3 18h18', copy: 'M9 9h12v12H9zM5 15H3V3h12v2', trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
 };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -207,12 +207,12 @@ function notAdminScreen() {
 
 // ------------------------------------------------------------------ the frame
 const NAV = [
-  ['', [['dashboard', 'Dashboard', 'home'], ['analytics', 'Analytics', 'chart'], ['support', 'Help & Support', 'help']]],
+  ['', [['dashboard', 'Dashboard', 'home'], ['live', 'Live Board', 'pulse'], ['analytics', 'Analytics', 'chart'], ['support', 'Help & Support', 'help']]],
   ['BHEJO', [['gift', 'Send Gift / Mail', 'gift'], ['notify', 'Notification', 'bell'], ['history', 'Sent Mail', 'mail']]],
   ['LOG', [['forms', 'Creator Forms', 'form'], ['creators', 'Creators', 'star'], ['partners', 'Partners', 'crown'], ['players', 'Players', 'users']]],
   ['GAME', [['rivers', 'Rivers', 'river'], ['reports', 'Reports', 'flag'], ['settings', 'Game Settings', 'gear'], ['log', 'Activity Log', 'log']]],
 ];
-const PAGES = { dashboard, analytics, support, gift: v => composer(v, false), notify: v => composer(v, true), history, forms, creators: v => people(v, 'creators'), partners: v => people(v, 'partners'), players, rivers, reports, settings, log: activity };
+const PAGES = { dashboard, live: liveBoard, analytics, support, gift: v => composer(v, false), notify: v => composer(v, true), history, forms, creators: v => people(v, 'creators'), partners: v => people(v, 'partners'), players, rivers, reports, settings, log: activity };
 let view, side, pendingBadge, supportBadge, prefill = null, leaveWork = [];
 function go(page, data) { prefill = data || null; if (location.hash.slice(1) === page) route(); else location.hash = page; }
 function shell() {
@@ -902,7 +902,7 @@ async function analytics(v, live, onLeave) {
       return h('tr.link', { tabindex: 0, onclick: () => go('players', { id: u.id }), onkeydown: e => { if (e.key === 'Enter') go('players', { id: u.id }); } },
         h('td.mono', {}, rank, ' ', move), h('td', {}, h('div.row', { style: 'gap:8px;flex-wrap:nowrap' }, h('span.dot', { class: on ? 'on' : '', title: on ? 'online' : 'offline' }), h('div', {}, h('div.name', {}, u.name || p.name || 'Player'), h('div.faint.mono', {}, showId(u.id))))),
         h('td', {}, `${flag(u.country)} ${countryName(u.country)}`),
-        COLS.map(([k, , show]) => h('td.n.mono', { class: changed(k) ? 'flash' : '' }, k === 'level' ? (u.level || p.level || '-') : show(u))),
+        COLS.map(([k, , show]) => h('td.n.mono', { class: changed(k) ? 'flash' : '' }, k === 'level' ? (u.level || p.level || '-') : k === 'seconds' && on ? clockText((u.seconds || 0) + Math.min(Math.max(0, nowSec() - (Number(u.lastAt) || nowSec())), 120)) : show(u))),   // online: the time ticks on since their last report
         h('td', {}, on ? h('span.tag.g', {}, p.state === 'race' ? `LIVE · racing ${p.river || ''}`.trim() : 'LIVE · home') : h('span.faint', {}, seenText(seen))));
     });
     if (fresh) { rankWas = new Map(topRows.map((u, i) => [u.id, i + 1])); valuesWas = new Map(topRows.map(u => [u.id, { ...u }])); }
@@ -968,9 +968,233 @@ async function analytics(v, live, onLeave) {
     stamp.textContent = ago < 5 ? 'Updated just now' : `Last change ${seenText(nowSec() - ago)}`;
     if (!navigator.onLine) setHealthy(false);
   });
+  every(1000, () => { if (topRows && topRows.some(u => isLive(presence.get(u.id)))) drawTop(); });   // online players' hours tick each second
   every(120000, watchPresence);                                 // slide the live window forward
   every(60000, () => { if (Date.now() - lastTotals > 55000) readTotals(); });   // quiet times still refresh once a minute
   every(300000, readHealth);
+}
+
+// ------------------------------------------------------------------ live board
+// One screen to leave open (or put on a TV): what is happening in the game right now, as pictures. Everything moves on
+// its own: listeners bring each change, the hours tick every second for the players who are online, and the graphs
+// grow from the moment the board is opened.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs, ...kids) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v !== undefined && v !== null) e.setAttribute(k, String(v));
+  for (const kid of kids.flat(Infinity)) if (kid !== null && kid !== undefined && kid !== false) e.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return e;
+}
+const niceTop = most => { if (most <= 4) return 4; const p = 10 ** Math.floor(Math.log10(most)); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= most) return Math.ceil(m * p); return most; };
+const legend = items => h('div.legend', {}, items.map(([color, label]) => h('span', {}, h('i', { style: `background:${color}` }), label)));
+
+/** Stacked area over time: points [{t, a, b}] (a under b). The newest point is on the right. */
+function areaChart(points, colors, minutes) {
+  const W = 720, H = 220, L = 34, B = 24, T = 10, R = 8;
+  const top = niceTop(Math.max(1, ...points.map(p => p.a + p.b)));
+  const end = Date.now(), start = end - minutes * 60000;
+  const x = t => L + (Math.max(t, start) - start) / (end - start) * (W - L - R), y = v => T + (1 - v / top) * (H - T - B);
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f => [svg('line', { x1: L, x2: W - R, y1: y(top * f), y2: y(top * f), class: 'gl' }), svg('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end' }, Math.round(top * f))]);
+  const step = minutes <= 6 ? 1 : minutes <= 15 ? 3 : 5;
+  const ticks = Array.from({ length: Math.floor(minutes / step) + 1 }, (_, i) => i * step).map(m => svg('text', { x: x(end - m * 60000), y: H - 6, 'text-anchor': m === 0 ? 'end' : m === minutes ? 'start' : 'middle' }, m === 0 ? 'abhi' : `${m}m`));
+  if (points.length < 2) return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': 'Online players over time' }, grid, ticks, svg('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', class: 'wait' }, 'Graph ban raha hai...'));
+  const path = (lo, hi) => {
+    const up = points.map(p => `${x(p.t).toFixed(1)},${y(hi(p)).toFixed(1)}`), down = [...points].reverse().map(p => `${x(p.t).toFixed(1)},${y(lo(p)).toFixed(1)}`);
+    return `M${up.join('L')}L${down.join('L')}Z`;
+  };
+  const line = f => `M${points.map(p => `${x(p.t).toFixed(1)},${y(f(p)).toFixed(1)}`).join('L')}`;
+  const last = points[points.length - 1];
+  return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': `Online players: ${last.a + last.b} now` }, grid, ticks,
+    svg('path', { d: path(() => 0, p => p.a), fill: colors[0], 'fill-opacity': 0.55 }), svg('path', { d: path(p => p.a, p => p.a + p.b), fill: colors[1], 'fill-opacity': 0.4 }),
+    svg('path', { d: line(p => p.a + p.b), fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-linejoin': 'round' }),
+    svg('circle', { cx: x(last.t), cy: y(last.a + last.b), r: 5, class: 'nowdot' }));
+}
+
+/** A ring cut into parts [{label, value, color}], the total (or a word) in the middle. */
+function donut(parts, middle, sub) {
+  const total = parts.reduce((s, p) => s + p.value, 0), r = 70, c = 2 * Math.PI * r;
+  let at = 0;
+  const rings = total ? parts.filter(p => p.value > 0).map(p => { const len = p.value / total * c, seg = svg('circle', { cx: 90, cy: 90, r, fill: 'none', stroke: p.color, 'stroke-width': 26, 'stroke-dasharray': `${Math.max(len - 2, 0.5)} ${c}`, 'stroke-dashoffset': -at, transform: 'rotate(-90 90 90)' }); at += len; return seg; })
+    : [svg('circle', { cx: 90, cy: 90, r, fill: 'none', stroke: '#3a2670', 'stroke-width': 26 })];
+  return h('div.donutwrap', {}, svg('svg', { viewBox: '0 0 180 180', class: 'donut', role: 'img', 'aria-label': parts.map(p => `${p.label} ${p.value}`).join(', ') }, rings,
+    svg('text', { x: 90, y: 92, 'text-anchor': 'middle', class: 'dbig' }, middle), svg('text', { x: 90, y: 114, 'text-anchor': 'middle', class: 'dsmall' }, sub || '')),
+  h('div.dlegend', {}, parts.map(p => h('div', {}, h('i', { style: `background:${p.color}` }), h('span', {}, p.label), h('b.mono', {}, num(p.value)), h('small', {}, total ? `${Math.round(p.value / total * 100)}%` : '')))));
+}
+
+/** Horizontal bars [{label, value, note}] longest first. */
+function hbars(rows, color, emptyText) {
+  if (!rows.length) return empty(emptyText);
+  const most = Math.max(1, ...rows.map(r => r.value));
+  return h('div.hbars', {}, rows.map(r => h('div.hbar', {}, h('span.hlabel', {}, r.label), h('span.htrack', {}, h('i', { style: `width:${Math.max(r.value / most * 100, 3)}%;background:${r.color || color}` })), h('b.mono', {}, num(r.value)), r.note ? h('small.faint', {}, r.note) : null)));
+}
+
+/** Bars per minute, two kinds side by side: buckets [{label, a, b}]. */
+function minuteBars(buckets, colors, names) {
+  const W = 720, H = 200, L = 30, B = 24, T = 10, R = 6, n = buckets.length, slot = (W - L - R) / n;
+  const top = niceTop(Math.max(1, ...buckets.map(k => Math.max(k.a, k.b)))), y = v => T + (1 - v / top) * (H - T - B);
+  const grid = [0, 0.5, 1].map(f => [svg('line', { x1: L, x2: W - R, y1: y(top * f), y2: y(top * f), class: 'gl' }), svg('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end' }, Math.round(top * f))]);
+  const bars = buckets.map((k, i) => {
+    const bw = Math.max(slot * 0.36, 1.5), x0 = L + i * slot + slot * 0.12;
+    return svg('g', {}, svg('title', {}, `${k.label}: ${k.a} ${names[0]}, ${k.b} ${names[1]}`),
+      k.a ? svg('rect', { x: x0, y: y(k.a), width: bw, height: H - B - y(k.a), rx: 2, fill: colors[0] }) : null,
+      k.b ? svg('rect', { x: x0 + bw + 1, y: y(k.b), width: bw, height: H - B - y(k.b), rx: 2, fill: colors[1] }) : null,
+      (n - 1 - i) % (n > 15 ? 5 : 2) === 0 ? svg('text', { x: x0 + bw, y: H - 6, 'text-anchor': i === n - 1 ? 'end' : 'middle' }, k.label) : null);
+  });
+  return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': `Per minute: ${names.join(' and ')}` }, grid, bars);
+}
+
+/** A number that rolls to its new value instead of jumping. */
+function rollTo(el, value, format) {
+  const from = Number(el.dataset.v || 0), to = Number(value) || 0;
+  el.dataset.v = to;
+  if (from === to || !el.isConnected) { el.textContent = format(to); return; }
+  const t0 = performance.now(), dur = 700;
+  const step = t => { const k = Math.min(1, (t - t0) / dur), e = 1 - (1 - k) ** 3; el.textContent = format(from + (to - from) * e); if (k < 1 && Number(el.dataset.v) === to) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+const clockText = sec => { const s = Math.max(0, Math.floor(sec)), hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60; return `${num(hh)}h ${String(mm).padStart(2, '0')}m ${String(ss).padStart(2, '0')}s`; };
+
+async function liveBoard(v, live, onLeave) {
+  const startDay = dayKey(), openedAt = Date.now();
+  const stops = [], timers = [];
+  onLeave(() => { stops.splice(0).forEach(s => { try { s(); } catch { /* gone */ } }); timers.splice(0).forEach(clearInterval); });
+  const listen = (q, next) => { const stop = fb.onSnapshot(q, snap => { if (live()) next(snap); }, e => { console.warn(e); pill.className = 'livepill off'; pill.replaceChildren(h('i'), 'RECONNECTING'); }); stops.push(stop); return () => { stop(); const i = stops.indexOf(stop); if (i >= 0) stops.splice(i, 1); }; };
+  const every = (ms, fn) => timers.push(setInterval(() => { if (live()) fn(); }, ms));
+
+  const pill = h('span.livepill', {}, h('i'), 'LIVE'), clock = h('b.clock.mono', {}, '');
+  const board = h('div.board');
+  const tvBtn = h('button.btn.small', { onclick: () => { if (document.fullscreenElement) document.exitFullscreen(); else board.requestFullscreen?.().catch(() => toast('Is browser me full screen nahi chala.', true)); } }, 'TV mode');
+  v.replaceChildren(head('Live Board', 'Game me abhi kya ho raha hai, graph me. Ye page khula chhod do: sab khud update hota hai.', h('div.row', {}, pill, clock, tvBtn)), board);
+
+  // the cards
+  const card = (cls, title, why) => { const body = h('div.cbody'); const el = h(`div.card.lcard${cls ? `.${cls}` : ''}`, {}, h('div.ctitle', {}, h('h2', {}, title), why ? h('p.why', {}, why) : null), body); return { el, body }; };
+  const heroNum = h('b.heronum', { 'data-v': 0 }, '0'), heroSub = h('div.herosub', {}, '');
+  const hero = card('hero', 'Players online now', 'Line jitni upar, utne zyada log abhi game me. Green = race me, blue = home screen pe.');
+  hero.el.insertBefore(h('div.herotop', {}, heroNum, heroSub), hero.body);
+  const doing = card('', 'Abhi kya kar rahe hain', 'Online players me se kitne race me hain aur kitne menu me.');
+  const counters = h('div.counters');
+  const perMin = card('wide', 'Har minute kya hua', 'Har bar ek minute hai. Blue = races shuru hui, gold = ads dekhe. Board khulne ke baad se.');
+  const rivers = card('', 'Kaunsi river pe race chal rahi', 'Abhi jo race kar rahe hain, wo kis river pe hain.');
+  const levels = card('', 'Online players ke level', 'Abhi online players kis level pe hain: naye (1-10) ya purane.');
+  const ads = card('', 'Aaj ke ads, type ke hisaab se', 'Rewarded aur Interstitial se sabse zyada kamai hoti hai.');
+  const countries = card('', 'Aaj kahan se khel rahe', 'Aaj ke players kis desh se hain.');
+  const versions = card('', 'Game versions (aaj)', 'Kitne players naya version chala rahe hain. Purana zyada ho to update ka notification bhejo.');
+  const ticker = card('wide', 'Abhi abhi', 'Game se aane wali har report, sabse nayi upar.');
+  board.replaceChildren(h('div.boardrow.r1', {}, hero.el, doing.el), counters, perMin.el, h('div.boardrow.r3', {}, rivers.el, levels.el, ads.el), h('div.boardrow.r3', {}, countries.el, versions.el, ticker.el));
+
+  // ---------------------------------------------------------------- presence: who is online, racing where, at what level
+  const online = new Map();
+  let stopPresence = null;
+  const watchPresence = () => {
+    if (stopPresence) stopPresence();
+    stopPresence = listen(fb.query(col('users'), fb.where('seen', '>=', String(nowSec() - 180)), fb.orderBy('seen', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
+      online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() })); drawPresence();
+    });
+  };
+  const liveList = () => [...online.values()].filter(u => u.state !== 'off' && nowSec() - Number(u.seen || 0) <= LIVE_SECONDS);
+  const series = [];   // {t, a: racing, b: home}, one every 5 s, the last 30 minutes
+  function sample() { const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - 30 * 60000) series.shift(); }
+  function drawPresence() {
+    const l = liveList(), racing = l.filter(u => u.state === 'race'), home = l.length - racing.length;
+    rollTo(heroNum, l.length, x => num(Math.round(x)) + (online.size >= PRESENCE_CAP ? '+' : ''));
+    heroSub.replaceChildren(h('span.tag.g', {}, `${num(racing.length)} racing`), h('span.tag.b', {}, `${num(home)} home`), h('span.faint', {}, series.length > 1 ? `30 min me sabse zyada: ${num(Math.max(...series.map(p => p.a + p.b)))}` : ''));
+    const span = series.length ? Math.min(30, Math.max(2, Math.ceil((Date.now() - series[0].t) / 60000))) : 2;   // zooms out as the board stays open, up to 30 minutes
+    hero.body.replaceChildren(areaChart(series, ['#4fd65c', '#42a9ff'], span), legend([['#4fd65c', 'Race me'], ['#42a9ff', 'Home screen']]));
+    doing.body.replaceChildren(donut([{ label: 'Race me', value: racing.length, color: '#4fd65c' }, { label: 'Home screen', value: home, color: '#42a9ff' }], num(l.length), 'online'));
+    const byRiver = {}; racing.forEach(u => { const r = u.river || 'Unknown'; byRiver[r] = (byRiver[r] || 0) + 1; });
+    rivers.body.replaceChildren(hbars(Object.entries(byRiver).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8), '#4fd65c', 'Abhi koi race nahi kar raha.'));
+    const bands = [['1-10', 1, 10, '#5ce0d8'], ['11-20', 11, 20, '#42a9ff'], ['21-40', 21, 40, '#8c5cff'], ['41-60', 41, 60, '#ff7ac6'], ['61-100', 61, 100, '#ffd23f']];
+    levels.body.replaceChildren(l.length ? hbars(bands.map(([label, lo, hi, color]) => ({ label: `Lv ${label}`, value: l.filter(u => { const x = Number(u.level) || 1; return x >= lo && x <= hi; }).length, color })), '#8c5cff', '') : empty('Abhi koi online nahi.'));
+  }
+
+  // ---------------------------------------------------------------- today's totals, with the hours ticking for everyone online
+  const C = {};
+  const counter = (key, label, color, sub) => { const b = h('b.cnum.mono', { 'data-v': 0 }, '0'), s = h('small', {}, sub || ''), bar = h('i'); C[key] = { b, s, bar }; return h('div.counter', { style: `--c:${color}` }, h('span.clabel', {}, label), b, h('div.vs', {}, h('span.vstrack', {}, bar), s)); };
+  counters.replaceChildren(counter('hours', 'Aaj kitna khela (sab players)', 'var(--pink)'), counter('players', 'Aaj kitne players aaye', 'var(--blue)'), counter('races', 'Aaj kitni races', '#5ce0d8'), counter('ads', 'Aaj kitne ads dekhe', 'var(--gold)'), counter('fresh', 'Aaj naye players', 'var(--green)'));
+  let today = { ...EMPTY_DAY }, yesterday = null, totalsAt = Date.now(), shownSeconds = 0, busy = false, again = false, lastRead = 0, soon = null;
+  async function readTotals() {
+    if (busy) { again = true; return; }
+    busy = true; lastRead = Date.now();
+    try {
+      const t = await dayTotals(dayKey(), true);
+      if (!live()) return;
+      today = t; totalsAt = Date.now(); drawTotals();
+      ads.body.replaceChildren(donut([{ label: 'Rewarded', value: t.rewarded, color: '#4fd65c' }, { label: 'Interstitial', value: t.interstitial, color: '#ffd23f' }, { label: 'Banner', value: t.banner, color: '#42a9ff' }, { label: 'Native', value: t.native, color: '#ff7ac6' }], num(adsOf(t)), 'ads aaj'));
+    } catch (e) { console.warn(e); } finally { busy = false; if (again) { again = false; setTimeout(readTotals, 3000); } }
+  }
+  const totalsChanged = () => { if (!soon) soon = setTimeout(() => { soon = null; if (live()) readTotals(); }, Math.max(1500, 8000 - (Date.now() - lastRead))); };
+  onLeave(() => clearTimeout(soon));
+  const vsYesterday = (key, now) => {
+    const c = C[key];
+    if (!yesterday) { c.s.textContent = ''; c.bar.style.width = '0'; return; }
+    const was = key === 'hours' ? yesterday.seconds : key === 'ads' ? adsOf(yesterday) : yesterday[key] || 0, pct = was ? Math.round(now / was * 100) : 0;
+    c.bar.style.width = `${Math.min(pct, 100)}%`;
+    c.s.textContent = was ? `kal ka ${pct}% (kal: ${key === 'hours' ? hours(was) : num(was)})` : 'kal ka data nahi';
+  };
+  function drawTotals() {
+    rollTo(C.players.b, today.players, x => num(Math.round(x))); vsYesterday('players', today.players);
+    rollTo(C.races.b, today.races, x => num(Math.round(x))); vsYesterday('races', today.races);
+    rollTo(C.ads.b, adsOf(today), x => num(Math.round(x))); vsYesterday('ads', adsOf(today));
+    rollTo(C.fresh.b, today.fresh, x => num(Math.round(x))); vsYesterday('fresh', today.fresh);
+  }
+  function tickHours() {   // reported seconds, plus one second a second for each player online since the last count; never backwards
+    const est = today.seconds + liveList().length * (Date.now() - totalsAt) / 1000;
+    shownSeconds = Math.max(shownSeconds, est);
+    C.hours.b.textContent = clockText(shownSeconds); vsYesterday('hours', shownSeconds);
+  }
+
+  // ---------------------------------------------------------------- every report as it lands: the per-minute bars and the ticker
+  const was = new Map(), events = [], minutes = new Map();   // minute (ms) -> {races, ads}
+  let ready = false;
+  listen(fb.query(col('stats_players'), fb.orderBy('lastAt', 'desc'), fb.limit(60)), snap => {
+    for (const ch of snap.docChanges()) {
+      if (ch.type === 'removed') continue;
+      const u = { id: ch.doc.id, ...ch.doc.data() }, before = was.get(u.id); was.set(u.id, u);
+      if (!ready) { events.push({ u, at: Number(u.lastAt) || 0 }); continue; }
+      const d = before ? { seconds: Math.max(0, (u.seconds || 0) - (before.seconds || 0)), ads: Math.max(0, (u.ads || 0) - (before.ads || 0)), races: Math.max(0, (u.races || 0) - (before.races || 0)) } : null;
+      events.unshift({ u, d, at: nowSec(), fresh: true });
+      if (d) { const m = Math.floor(Date.now() / 60000) * 60000, k = minutes.get(m) || { races: 0, ads: 0 }; k.races += d.races; k.ads += d.ads; minutes.set(m, k); }
+    }
+    events.sort((a, b) => b.at - a.at); events.splice(30);
+    if (ready) totalsChanged();
+    ready = true; drawTicker(); drawMinutes();
+  });
+  function drawMinutes() {
+    const nowM = Math.floor(Date.now() / 60000) * 60000;
+    const n = Math.min(30, Math.max(10, Math.ceil((Date.now() - openedAt) / 60000) + 1));   // ten minutes at first, growing to thirty
+    const buckets = Array.from({ length: n }, (_, i) => { const m = nowM - (n - 1 - i) * 60000, k = minutes.get(m) || { races: 0, ads: 0 }; return { label: i === n - 1 ? 'abhi' : `${n - 1 - i}m`, a: k.races, b: k.ads }; });
+    for (const m of minutes.keys()) if (m < nowM - 30 * 60000) minutes.delete(m);
+    const tot = buckets.reduce((s, k) => ({ a: s.a + k.a, b: s.b + k.b }), { a: 0, b: 0 });
+    perMin.body.replaceChildren(h('div.row', { style: 'gap:18px;margin-bottom:6px' }, h('span.kpi', {}, h('b', { style: 'color:#42a9ff' }, num(tot.a)), ' races'), h('span.kpi', {}, h('b', { style: 'color:#ffd23f' }, num(tot.b)), ' ads'), h('span.faint', {}, `pichhle ${Math.min(30, Math.max(1, Math.ceil((Date.now() - openedAt) / 60000)))} minute me`)),
+      minuteBars(buckets, ['#42a9ff', '#ffd23f'], ['races', 'ads']), legend([['#42a9ff', 'Races'], ['#ffd23f', 'Ads']]));
+  }
+  function drawTicker() {
+    const what = e => !e.d ? `${hours(e.u.seconds)} total khela` : [e.d.seconds > 0 ? `+${hours(e.d.seconds)} khela` : null, e.d.races > 0 ? `+${e.d.races} race` : null, e.d.ads > 0 ? `+${e.d.ads} ad` : null].filter(Boolean).join(' · ') || 'wapas aaya';
+    ticker.body.replaceChildren(events.length ? h('div.list.ticker', {}, events.slice(0, 12).map(e => h('button.item.linkrow', { class: e.fresh ? 'flash' : '', onclick: () => go('players', { id: e.u.id }) }, avatar(e.u.name), h('div.grow', {}, h('div.name', {}, e.u.name || 'Player', ' ', h('span.faint', {}, flag(e.u.country))), h('div.faint', {}, what(e))), h('span.faint.mono', {}, seenText(e.at))))) : empty('Abhi data nahi aaya.'));
+    events.forEach(e => { e.fresh = false; });
+  }
+
+  // ---------------------------------------------------------------- countries and versions today
+  listen(fb.query(col(`stats_days/${dayKey()}/dims`), fb.limit(300)), snap => {
+    const rows = snap.docs.map(d => ({ id: d.id, n: d.data().n || 0 }));
+    countries.body.replaceChildren(hbars(rows.filter(r => r.id.startsWith('c_')).sort((a, b) => b.n - a.n).slice(0, 8).map(r => ({ label: `${flag(r.id.slice(2))} ${countryName(r.id.slice(2))}`, value: r.n })), '#ff7ac6', 'Abhi data nahi aaya.'));
+    const vs = rows.filter(r => r.id.startsWith('v_')).sort((a, b) => b.n - a.n), palette = ['#4fd65c', '#42a9ff', '#ffd23f', '#ff7ac6', '#8c5cff', '#5ce0d8'];
+    const parts = vs.slice(0, 5).map((r, i) => ({ label: `v${r.id.slice(2)}`, value: r.n, color: palette[i] }));
+    if (vs.length > 5) parts.push({ label: 'Baaki', value: vs.slice(5).reduce((s, r) => s + r.n, 0), color: '#7a6aa8' });
+    versions.body.replaceChildren(vs.length ? donut(parts, vs[0] ? `v${vs[0].id.slice(2)}` : '-', 'sabse zyada') : empty('Abhi data nahi aaya.'));
+  });
+
+  // ---------------------------------------------------------------- go
+  const tickClock = () => { clock.textContent = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' IST'; };
+  tickClock(); watchPresence(); sample(); drawPresence(); drawMinutes(); drawTicker();
+  await readTotals();
+  yesterday = await dayTotals(dayKey(1), true).catch(() => null);
+  if (!live()) return;
+  drawTotals();
+  every(1000, () => { tickClock(); tickHours(); });
+  every(5000, () => { if (dayKey() !== startDay) { route(); return; } sample(); drawPresence(); drawMinutes(); });
+  every(120000, watchPresence);
+  every(60000, () => { if (Date.now() - lastRead > 55000) readTotals(); });
 }
 
 // ------------------------------------------------------------------ help and support

@@ -1,5 +1,5 @@
-ADMIN PANEL UPDATE: SAB KUCH LIVE (REALTIME) ANALYTICS
-=====================================================
+ADMIN PANEL UPDATE: LIVE BOARD + SAB KUCH LIVE
+==============================================
 Is update me koi naya rule deploy NAHI karna. Bas ye 2 kaam karo.
 
 1) GITHUB PE 2 FILES BADLO
@@ -14,7 +14,20 @@ Is update me koi naya rule deploy NAHI karna. Bas ye 2 kaam karo.
    Game ab har 1 minute pe data bhejta hai (pehle 3 minute), aur race ya full-screen ad
    ke ~10 second baad turant. Purane version wale players ka data 3 minute me aata rahega.
 
-PANEL ME KYA LIVE HUA
+NAYA: LIVE BOARD (menu me Dashboard ke neeche)
+  Ek screen jo khula chhod do (ya TV pe lagao, "TV mode" button = full screen):
+    - Players online now: bada number + graph. Green = race me, blue = home screen.
+      Graph board khulte hi banna shuru hota hai aur 30 minute tak dikhata hai.
+    - Abhi kya kar rahe: gol chart, kitne race me / kitne menu me.
+    - Aaj ke 5 counters: kitna khela (har second badhta hai), players, races, ads,
+      naye players. Har ek ke neeche "kal ka kitna %" ki line.
+    - Har minute kya hua: har minute ki races (blue) aur ads (gold) ke bars.
+    - Kaunsi river pe race chal rahi, online players ke level, aaj ke ads type ke
+      hisaab se, kis desh se khel rahe, kaunsa game version, aur "Abhi abhi" feed.
+    - Har graph ke upar ek line likhi hai ki usse kya samajhna hai.
+  Top players (Analytics): online player ka "Hours" ab har second badhta dikhta hai.
+
+PANEL ME KYA LIVE HUA (pichhla update)
   Analytics
     - Live now: kaun abhi game me hai, kitne race me, kitne home pe. Har change turant.
     - Playing now list: naam, level, kaunsi river pe race, kitne second pehle dikha.
