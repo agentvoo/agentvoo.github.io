@@ -2,7 +2,7 @@ ADMIN PANEL UPDATE: LIVE BOARD JO REFRESH KE BAAD BHI YAAD RAKHE
 ===============================================================
 Is baar 3 kaam hain, ISI ORDER me.
 
-1) NAYE RULES DEPLOY KARO (pehle ye!)
+1) NAYE RULES DEPLOY KARO (ye 24 Nov ko ho chuka hai)
    cd ~/Downloads/RaftParty_Game/RaftGame_Assets/RaftParty_UnityProject/Firebase
    firebase deploy --only firestore:rules --project fart2-d0d9f
    (Naya: stats_minutes. Game har minute ka chhota record yahan likhta hai. Sirf admin padh sakta hai,
@@ -18,6 +18,15 @@ Is baar 3 kaam hain, ISI ORDER me.
    Game har minute ka record (kitne players khele, races, ads, time) Firebase me likhega.
    Rules deploy kiye bina game update daala to bhi game ka baaki data safe rahega,
    bas minute wala record nahi banega.
+
+NAYA (is update me): "SAB PLAYERS NE MILKE KITNA KHELA" (Live Board pe, sabse upar ke neeche)
+  - Shuru se ab tak sab players ka total time jod ke (1 ghanta + 2 ghante = 3 ghante),
+    har second badhta hai, refresh pe peeche nahi jata.
+  - Aaj / Is mahine / Pichhle 7 ya 30 din ka total, aur "Sabse zyada kis din" (date ke saath).
+  - Har din ka bar: gold = sabse zyada khela, green = aaj (live).
+  - Date wise list: har date ka total time, players, ek player ka avg, races.
+    "Nayi date pehle" ya "Sabse zyada pehle" se sort karo.
+  Upload: website/style.css aur website/js/app.js (rules pehle hi deploy ho chuke hain).
 
 LIVE BOARD ME AB KYA HOTA HAI
   - Refresh karo ya dusre page se wapas aao: graph wahin se chalu rehta hai, shuru se nahi.

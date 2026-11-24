@@ -117,3 +117,17 @@ th.sorted{color:var(--gold)}
 .ticker{max-height:420px;overflow-y:auto}
 .clock{font-size:15px;color:var(--soft)}
 .board:fullscreen{background:var(--bg);padding:24px;overflow:auto}
+
+/* all players together */
+.lcard.played{background:linear-gradient(160deg,#3a1650,#1d0f42);border-color:#7a3a8a}
+.playtop{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr);gap:16px;align-items:stretch}
+@media (max-width:900px){.playtop{grid-template-columns:1fr}}
+.allbox{display:grid;gap:6px;align-content:center;background:rgba(255,122,198,.08);border:1px solid #7a3a8a;border-radius:var(--r);padding:16px}
+.allnum{font:400 40px/1.1 Titan;color:var(--pink);text-shadow:0 0 24px rgba(255,122,198,.35);overflow-wrap:anywhere}
+.minis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.mini{display:grid;gap:4px;align-content:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.mini span{color:var(--soft);font-size:13px}.mini b{font:400 18px Titan;color:var(--ink);white-space:nowrap}.mini small{color:var(--faint);font-size:12px}
+.mini.best{border-color:var(--gold)}.mini.best b{color:var(--gold);font-size:17px}
+.chartsvg .bestlbl{fill:var(--gold);font-weight:700}
+.besttr td{background:rgba(255,210,63,.12)}
+.datatable.open .scroll{max-height:320px}

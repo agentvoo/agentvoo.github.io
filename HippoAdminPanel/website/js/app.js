@@ -1082,7 +1082,8 @@ async function liveBoard(v, live, onLeave) {
   const countries = card('', 'Aaj kahan se khel rahe', 'Aaj ke players kis desh se hain.');
   const versions = card('', 'Game versions (aaj)', 'Kitne players naya version chala rahe hain. Purana zyada ho to update ka notification bhejo.');
   const ticker = card('wide', 'Abhi abhi', 'Game se aane wali har report, sabse nayi upar.');
-  board.replaceChildren(h('div.boardrow.r1', {}, hero.el, doing.el), counters, perMin.el, h('div.boardrow.r3', {}, rivers.el, levels.el, ads.el), h('div.boardrow.r3', {}, countries.el, versions.el, ticker.el));
+  const played = card('wide.played', 'Sab players ne milke kitna khela', 'Har player ka time jod ke: ek ne 1 ghanta khela, dusre ne 2, to total 3 ghante. Har second badhta hai.');
+  board.replaceChildren(h('div.boardrow.r1', {}, hero.el, doing.el), played.el, counters, perMin.el, h('div.boardrow.r3', {}, rivers.el, levels.el, ads.el), h('div.boardrow.r3', {}, countries.el, versions.el, ticker.el));
 
   // ---------------------------------------------------------------- presence: who is online, racing where, at what level
   const online = new Map();
@@ -1100,7 +1101,7 @@ async function liveBoard(v, live, onLeave) {
   // What the graphs have seen is kept in this browser, so a refresh or another page and back carries on where it was.
   // The game's per-minute history (stats_minutes) fills in the time this board was closed, on any device.
   const KEEP_MS = 2 * 3600000, MEM = 'hippoAdmin.board.v1';
-  let series = [], windowMin = 30, savedPlayed = 0;
+  let series = [], windowMin = 30, savedPlayed = 0, savedAll = 0;
   const minutes = new Map(), server = new Map();   // minute start (ms) -> {races, ads} seen here / {players, races, ads} from the game
   try {
     const m = JSON.parse(localStorage.getItem(MEM) || 'null');
@@ -1109,9 +1110,10 @@ async function liveBoard(v, live, onLeave) {
       (m.minutes || []).forEach(([t, r, a]) => { if (t > Date.now() - KEEP_MS) minutes.set(t, { races: r, ads: a }); });
       windowMin = m.window || 30;
       if (m.played && Date.now() - m.played.at < 30 * 60000) savedPlayed = m.played.s;   // the 'played today' counter carries on, never back
+      if (m.all && Date.now() - m.all.at < 30 * 60000) savedAll = m.all.s;
     }
   } catch { /* start fresh */ }
-  const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]), played: { s: shownSeconds, at: Date.now() } })); } catch { /* full or blocked */ } };
+  const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]), played: { s: shownSeconds, at: Date.now() }, all: { s: allShown, at: Date.now() } })); } catch { /* full or blocked */ } };
   function sample() { if (!presenceReady) return; const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - KEEP_MS) series.shift(); remember(); }
   // India-time minute keys, as the game writes them: 202611242131
   const minuteKey = ms => { const d = new Date(ms + IST); return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`; };
@@ -1158,7 +1160,11 @@ async function liveBoard(v, live, onLeave) {
     try {
       const t = await dayTotals(dayKey(), true);
       if (!live()) return;
+      const all = await fb.getAggregateFromServer(col('stats_players'), { v: fb.sum('seconds') }).then(r => r.data().v || 0).catch(() => null);
+      if (!live()) return;
+      if (all !== null) allSeconds = all;
       today = t; totalsAt = Date.now(); drawTotals();
+      if (playDays.length) { playDays[playDays.length - 1].t = t; drawPlayed(); }
       ads.body.replaceChildren(donut([{ label: 'Rewarded', value: t.rewarded, color: '#4fd65c' }, { label: 'Interstitial', value: t.interstitial, color: '#ffd23f' }, { label: 'Banner', value: t.banner, color: '#42a9ff' }, { label: 'Native', value: t.native, color: '#ff7ac6' }], num(adsOf(t)), 'ads aaj'));
     } catch (e) { console.warn(e); } finally { busy = false; if (again) { again = false; setTimeout(readTotals, 3000); } }
   }
@@ -1188,10 +1194,65 @@ async function liveBoard(v, live, onLeave) {
     }
     return sum;
   }
+  // ---------------------------------------------------------------- all players together, and day by day
+  let allSeconds = 0, allShown = savedAll, playDays = [], playRange = 30, playSort = 'new', allNum = null, todayNum = null;
+  const dateText = key => new Date(Date.UTC(+key.slice(0, 4), +key.slice(4, 6) - 1, +key.slice(6))).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const hrs = sec => (sec / 3600).toFixed(sec < 36000 ? 1 : 0);
+  async function readPlayDays() {
+    const keys = Array.from({ length: 30 }, (_, i) => dayKey(29 - i));   // finished days come from this browser's cache after the first time
+    const got = await Promise.all(keys.map(k => k === dayKey() ? Promise.resolve(today) : dayTotals(k, k >= dayKey(1)).catch(() => ({ ...EMPTY_DAY }))));
+    if (!live()) return;
+    playDays = keys.map((key, i) => ({ key, t: got[i] }));
+    drawPlayed();
+  }
+  /** One bar a day, the busiest one in gold with its hours written on it. */
+  function playBars(list) {
+    const W = 720, H = 230, L = 40, B = 34, T = 22, R = 6, n = list.length, slot = (W - L - R) / n;
+    const val = d => d.key === dayKey() ? shownSeconds / 3600 : d.t.seconds / 3600;
+    const most = Math.max(...list.map(val)), top = niceTop(Math.max(1, most)), y = v => T + (1 - v / top) * (H - T - B);
+    const grid = [0, 0.5, 1].map(f => [svg('line', { x1: L, x2: W - R, y1: y(top * f), y2: y(top * f), class: 'gl' }), svg('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end' }, `${Math.round(top * f)}h`)]);
+    const bestAt = most > 0 ? list.findIndex(d => val(d) === most) : -1;
+    const bars = list.map((d, i) => {
+      const v = val(d), best = i === bestAt, today_ = d.key === dayKey(), bw = slot * 0.7, x0 = L + i * slot + slot * 0.15;
+      const label = new Date(Date.UTC(+d.key.slice(0, 4), +d.key.slice(4, 6) - 1, +d.key.slice(6))).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+      return svg('g', {}, svg('title', {}, `${dateText(d.key)}: ${hours(Math.round(v * 3600))} · ${num(d.t.players)} players`),
+        v > 0 ? svg('rect', { x: x0, y: y(v), width: bw, height: H - B - y(v), rx: 3, fill: best ? '#ffd23f' : today_ ? '#4fd65c' : '#ff7ac6', 'fill-opacity': best || today_ ? 1 : 0.75 }) : null,
+        best || (n <= 7 && v > 0) ? svg('text', { x: x0 + bw / 2, y: y(v) - 6, 'text-anchor': 'middle', class: best ? 'bestlbl' : '' }, `${hrs(v * 3600)}h`) : null,
+        best || n <= 7 || (i % 3 === (n - 1) % 3 && Math.abs(i - bestAt) > 1) ? svg('text', { x: x0 + bw / 2, y: H - B + 15, 'text-anchor': 'middle', class: best ? 'bestlbl' : '' }, today_ ? 'Aaj' : label) : null);
+    });
+    return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': 'Hours played each day' }, grid, bars);
+  }
+  function drawPlayed() {
+    allNum = h('b.allnum.mono', {}, clockText(allShown)); todayNum = h('b.mono', {}, clockText(shownSeconds));
+    const list = playDays.slice(-playRange), secs = d => d.key === dayKey() ? shownSeconds : d.t.seconds;
+    const sum = list.reduce((s, d) => s + secs(d), 0), best = list.reduce((b, d) => (secs(d) > (b ? secs(b) : 0) ? d : b), null);
+    const month = playDays.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).reduce((s, d) => s + secs(d), 0);
+    const rows = [...list].sort((a, b) => playSort === 'most' ? secs(b) - secs(a) : b.key.localeCompare(a.key));
+    const tabs = (items, now, set) => h('div.tabs', { style: 'margin:0' }, items.map(([k, l]) => h('button.tab', { class: now === k ? 'on' : '', onclick: () => { set(k); drawPlayed(); } }, l)));
+    played.body.replaceChildren(
+      h('div.playtop', {},
+        h('div.allbox', {}, h('span.clabel', {}, 'Shuru se ab tak, sab players ka total'), allNum, h('small.faint', {}, `${num(Math.floor(allShown / 3600))} ghante · har second badhta hai`)),
+        h('div.minis', {},
+          h('div.mini', {}, h('span', {}, 'Aaj'), todayNum),
+          h('div.mini', {}, h('span', {}, 'Is mahine'), h('b.mono', {}, hours(month))),
+          h('div.mini', {}, h('span', {}, `Pichhle ${playRange} din`), h('b.mono', {}, hours(sum))),
+          h('div.mini.best', {}, h('span', {}, 'Sabse zyada kis din'), h('b', {}, best && secs(best) ? (best.key === dayKey() ? 'Aaj' : dateText(best.key)) : '-'), h('small', {}, best && secs(best) ? `${hours(secs(best))} · ${num(best.t.players)} players` : '')))),
+      h('div.row.between', {}, h('h3', { style: 'margin:0' }, 'Din ke hisaab se'), tabs([[7, '7 din'], [30, '30 din']], playRange, k => { playRange = k; })),
+      playDays.length ? playBars(list) : loading(),
+      legend([['#ffd23f', 'Sabse zyada khela'], ['#4fd65c', 'Aaj (live)'], ['#ff7ac6', 'Baaki din']]),
+      h('details.datatable.open', { open: true }, h('summary', {}, 'Date wise list'),
+        h('div.row', { style: 'margin:8px 0' }, tabs([['new', 'Nayi date pehle'], ['most', 'Sabse zyada pehle']], playSort, k => { playSort = k; })),
+        h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Date'), h('th.n', {}, 'Total khela'), h('th.n', {}, 'Players'), h('th.n', {}, 'Ek player avg'), h('th.n', {}, 'Races'))),
+          h('tbody', {}, rows.map(d => h('tr', { class: d === best && secs(d) ? 'besttr' : '' }, h('td', {}, d.key === dayKey() ? `Aaj · ${dateText(d.key)}` : dateText(d.key)), h('td.n.mono', {}, hours(secs(d))), h('td.n.mono', {}, num(d.t.players)), h('td.n.mono', {}, hours(d.t.players ? Math.round(secs(d) / d.t.players) : 0)), h('td.n.mono', {}, num(d.t.races)))))))));
+  }
+
   function tickHours() {
     const est = today.seconds + unreported();
     shownSeconds = Math.max(shownSeconds, est);
     C.hours.b.textContent = clockText(shownSeconds); vsYesterday('hours', shownSeconds);
+    allShown = Math.max(allShown, allSeconds + (est - today.seconds));
+    if (allNum) allNum.textContent = clockText(allShown);
+    if (todayNum) todayNum.textContent = clockText(shownSeconds);
   }
 
   // ---------------------------------------------------------------- every report as it lands: the per-minute bars and the ticker
@@ -1242,10 +1303,11 @@ async function liveBoard(v, live, onLeave) {
   tickClock(); watchPresence(); watchHistory(); sample(); drawPresence(); drawMinutes(); drawTicker();
   await readTotals();
   yesterday = await dayTotals(dayKey(1), true).catch(() => null);
+  readPlayDays();
   if (!live()) return;
   drawTotals();
   every(1000, () => { tickClock(); tickHours(); });
-  every(5000, () => { if (dayKey() !== startDay) { route(); return; } sample(); drawPresence(); drawMinutes(); });
+  every(5000, () => { if (dayKey() !== startDay) { route(); return; } sample(); drawPresence(); drawMinutes(); });   // the day list redraws when a report lands, so its scroll stays put
   every(120000, watchPresence);
   every(600000, watchHistory);   // slide the two-hour window forward
   every(60000, () => { if (Date.now() - lastRead > 55000) readTotals(); });
