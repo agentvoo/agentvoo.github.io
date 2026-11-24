@@ -991,12 +991,13 @@ const legend = items => h('div.legend', {}, items.map(([color, label]) => h('spa
 /** Stacked area over time: points [{t, a, b}] (a under b). The newest point is on the right. */
 function areaChart(points, colors, minutes) {
   const W = 720, H = 220, L = 34, B = 24, T = 10, R = 8;
-  const top = niceTop(Math.max(1, ...points.map(p => p.a + p.b)));
+  const tot = p => p.a + p.b + (p.c || 0);
+  const top = niceTop(Math.max(1, ...points.map(tot)));
   const end = Date.now(), start = end - minutes * 60000;
   const x = t => L + (Math.max(t, start) - start) / (end - start) * (W - L - R), y = v => T + (1 - v / top) * (H - T - B);
   const grid = [0, 0.25, 0.5, 0.75, 1].map(f => [svg('line', { x1: L, x2: W - R, y1: y(top * f), y2: y(top * f), class: 'gl' }), svg('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end' }, Math.round(top * f))]);
-  const step = minutes <= 6 ? 1 : minutes <= 15 ? 3 : 5;
-  const ticks = Array.from({ length: Math.floor(minutes / step) + 1 }, (_, i) => i * step).map(m => svg('text', { x: x(end - m * 60000), y: H - 6, 'text-anchor': m === 0 ? 'end' : m === minutes ? 'start' : 'middle' }, m === 0 ? 'abhi' : `${m}m`));
+  const step = minutes <= 6 ? 1 : minutes <= 15 ? 3 : minutes <= 30 ? 5 : minutes <= 60 ? 10 : 20;
+  const ticks = Array.from({ length: Math.floor(minutes / step) + 1 }, (_, i) => i * step).map(m => svg('text', { x: x(end - m * 60000), y: H - 6, 'text-anchor': m === 0 ? 'end' : m === minutes ? 'start' : 'middle' }, m === 0 ? 'abhi' : m >= 60 && m % 60 === 0 ? `${m / 60}h` : m > 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`));
   if (points.length < 2) return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': 'Online players over time' }, grid, ticks, svg('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', class: 'wait' }, 'Graph ban raha hai...'));
   const path = (lo, hi) => {
     const up = points.map(p => `${x(p.t).toFixed(1)},${y(hi(p)).toFixed(1)}`), down = [...points].reverse().map(p => `${x(p.t).toFixed(1)},${y(lo(p)).toFixed(1)}`);
@@ -1004,10 +1005,11 @@ function areaChart(points, colors, minutes) {
   };
   const line = f => `M${points.map(p => `${x(p.t).toFixed(1)},${y(f(p)).toFixed(1)}`).join('L')}`;
   const last = points[points.length - 1];
-  return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': `Online players: ${last.a + last.b} now` }, grid, ticks,
+  return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': `Online players: ${tot(last)} now` }, grid, ticks,
     svg('path', { d: path(() => 0, p => p.a), fill: colors[0], 'fill-opacity': 0.55 }), svg('path', { d: path(p => p.a, p => p.a + p.b), fill: colors[1], 'fill-opacity': 0.4 }),
-    svg('path', { d: line(p => p.a + p.b), fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-linejoin': 'round' }),
-    svg('circle', { cx: x(last.t), cy: y(last.a + last.b), r: 5, class: 'nowdot' }));
+    svg('path', { d: path(p => p.a + p.b, tot), fill: colors[2] || '#8c5cff', 'fill-opacity': 0.45 }),
+    svg('path', { d: line(tot), fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-linejoin': 'round' }),
+    svg('circle', { cx: x(last.t), cy: y(tot(last)), r: 5, class: 'nowdot' }));
 }
 
 /** A ring cut into parts [{label, value, color}], the total (or a word) in the middle. */
@@ -1038,7 +1040,7 @@ function minuteBars(buckets, colors, names) {
     return svg('g', {}, svg('title', {}, `${k.label}: ${k.a} ${names[0]}, ${k.b} ${names[1]}`),
       k.a ? svg('rect', { x: x0, y: y(k.a), width: bw, height: H - B - y(k.a), rx: 2, fill: colors[0] }) : null,
       k.b ? svg('rect', { x: x0 + bw + 1, y: y(k.b), width: bw, height: H - B - y(k.b), rx: 2, fill: colors[1] }) : null,
-      (n - 1 - i) % (n > 15 ? 5 : 2) === 0 ? svg('text', { x: x0 + bw, y: H - 6, 'text-anchor': i === n - 1 ? 'end' : 'middle' }, k.label) : null);
+      (n - 1 - i) % (n > 60 ? 15 : n > 15 ? 5 : 2) === 0 ? svg('text', { x: x0 + bw, y: H - 6, 'text-anchor': i === n - 1 ? 'end' : 'middle' }, k.label) : null);
   });
   return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': `Per minute: ${names.join(' and ')}` }, grid, bars);
 }
@@ -1069,11 +1071,11 @@ async function liveBoard(v, live, onLeave) {
   // the cards
   const card = (cls, title, why) => { const body = h('div.cbody'); const el = h(`div.card.lcard${cls ? `.${cls}` : ''}`, {}, h('div.ctitle', {}, h('h2', {}, title), why ? h('p.why', {}, why) : null), body); return { el, body }; };
   const heroNum = h('b.heronum', { 'data-v': 0 }, '0'), heroSub = h('div.herosub', {}, '');
-  const hero = card('hero', 'Players online now', 'Line jitni upar, utne zyada log abhi game me. Green = race me, blue = home screen pe.');
+  const hero = card('hero', 'Players online now', 'Line jitni upar, utne zyada log game me. Green = race me, blue = home screen. Purple = jab ye board band tha, game ke minute data se.');
   hero.el.insertBefore(h('div.herotop', {}, heroNum, heroSub), hero.body);
   const doing = card('', 'Abhi kya kar rahe hain', 'Online players me se kitne race me hain aur kitne menu me.');
   const counters = h('div.counters');
-  const perMin = card('wide', 'Har minute kya hua', 'Har bar ek minute hai. Blue = races shuru hui, gold = ads dekhe. Board khulne ke baad se.');
+  const perMin = card('wide', 'Har minute kya hua', 'Har bar ek minute hai. Blue = races shuru hui, gold = ads dekhe. Refresh karne par bhi graph rehta hai.');
   const rivers = card('', 'Kaunsi river pe race chal rahi', 'Abhi jo race kar rahe hain, wo kis river pe hain.');
   const levels = card('', 'Online players ke level', 'Abhi online players kis level pe hain: naye (1-10) ya purane.');
   const ads = card('', 'Aaj ke ads, type ke hisaab se', 'Rewarded aur Interstitial se sabse zyada kamai hoti hai.');
@@ -1088,18 +1090,55 @@ async function liveBoard(v, live, onLeave) {
   const watchPresence = () => {
     if (stopPresence) stopPresence();
     stopPresence = listen(fb.query(col('users'), fb.where('seen', '>=', String(nowSec() - 180)), fb.orderBy('seen', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
-      online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() })); drawPresence();
+      online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() }));
+      if (!presenceReady) { presenceReady = true; sample(); }
+      drawPresence();
     });
   };
+  let presenceReady = false;   // no sample until the first answer: an empty list before it is not 'nobody online'
   const liveList = () => [...online.values()].filter(u => u.state !== 'off' && nowSec() - Number(u.seen || 0) <= LIVE_SECONDS);
-  const series = [];   // {t, a: racing, b: home}, one every 5 s, the last 30 minutes
-  function sample() { const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - 30 * 60000) series.shift(); }
+  // What the graphs have seen is kept in this browser, so a refresh or another page and back carries on where it was.
+  // The game's per-minute history (stats_minutes) fills in the time this board was closed, on any device.
+  const KEEP_MS = 2 * 3600000, MEM = 'hippoAdmin.board.v1';
+  let series = [], windowMin = 30;
+  const minutes = new Map(), server = new Map();   // minute start (ms) -> {races, ads} seen here / {players, races, ads} from the game
+  try {
+    const m = JSON.parse(localStorage.getItem(MEM) || 'null');
+    if (m && m.day === startDay) {
+      series = (m.series || []).map(([t, a, b]) => ({ t, a, b })).filter(p => p.t > Date.now() - KEEP_MS);
+      (m.minutes || []).forEach(([t, r, a]) => { if (t > Date.now() - KEEP_MS) minutes.set(t, { races: r, ads: a }); });
+      windowMin = m.window || 30;
+    }
+  } catch { /* start fresh */ }
+  const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]) })); } catch { /* full or blocked */ } };
+  function sample() { if (!presenceReady) return; const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - KEEP_MS) series.shift(); remember(); }
+  // India-time minute keys, as the game writes them: 202611242131
+  const minuteKey = ms => { const d = new Date(ms + IST); return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+  const keyMs = k => Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8), +k.slice(8, 10), +k.slice(10, 12)) - IST;
+  let stopHistory = null;
+  function watchHistory() {
+    if (stopHistory) stopHistory();
+    stopHistory = listen(fb.query(col('stats_minutes'), fb.where(fb.documentId(), '>=', `${minuteKey(Date.now() - KEEP_MS)}_0`), fb.orderBy(fb.documentId()), fb.limit(1500)), snap => {
+      server.clear();
+      snap.docs.forEach(d => { const t = keyMs(d.id.slice(0, 12)), x = d.data(), k = server.get(t) || { players: 0, races: 0, ads: 0 }; k.players += x.players || 0; k.races += x.races || 0; k.ads += x.ads || 0; server.set(t, k); });
+      drawPresence(); drawMinutes();
+    });
+  }
+  // The online line: this board's own 5-second samples where it has them, the game's minute counts for the rest (purple).
+  function onlinePoints() {
+    const start = Date.now() - windowMin * 60000, mine = series.filter(p => p.t >= start), covered = new Set(mine.map(p => Math.floor(p.t / 60000) * 60000));
+    const past = [...server].filter(([t]) => t >= start && t < Date.now() - 60000 && !covered.has(t)).map(([t, k]) => ({ t: t + 30000, a: 0, b: 0, c: k.players }));
+    return [...past, ...mine].sort((a, b) => a.t - b.t);
+  }
+  const windowTabs = () => h('div.tabs', { style: 'margin:0' }, [[30, '30 min'], [120, '2 ghante']].map(([m, l]) => h('button.tab', { class: windowMin === m ? 'on' : '', onclick: () => { windowMin = m; remember(); drawPresence(); drawMinutes(); } }, l)));
   function drawPresence() {
     const l = liveList(), racing = l.filter(u => u.state === 'race'), home = l.length - racing.length;
     rollTo(heroNum, l.length, x => num(Math.round(x)) + (online.size >= PRESENCE_CAP ? '+' : ''));
-    heroSub.replaceChildren(h('span.tag.g', {}, `${num(racing.length)} racing`), h('span.tag.b', {}, `${num(home)} home`), h('span.faint', {}, series.length > 1 ? `30 min me sabse zyada: ${num(Math.max(...series.map(p => p.a + p.b)))}` : ''));
-    const span = series.length ? Math.min(30, Math.max(2, Math.ceil((Date.now() - series[0].t) / 60000))) : 2;   // zooms out as the board stays open, up to 30 minutes
-    hero.body.replaceChildren(areaChart(series, ['#4fd65c', '#42a9ff'], span), legend([['#4fd65c', 'Race me'], ['#42a9ff', 'Home screen']]));
+    const pts = onlinePoints(), peak = pts.length ? Math.max(...pts.map(p => p.a + p.b + (p.c || 0))) : 0;
+    heroSub.replaceChildren(h('span.tag.g', {}, `${num(racing.length)} racing`), h('span.tag.b', {}, `${num(home)} home`), h('span.faint', {}, pts.length > 1 ? `${windowMin === 30 ? '30 min' : '2 ghante'} me sabse zyada: ${num(peak)}` : ''));
+    // with no history yet, zoom to what there is; with the game's history, the whole window
+    const span = server.size ? windowMin : pts.length ? Math.min(windowMin, Math.max(2, Math.ceil((Date.now() - pts[0].t) / 60000))) : 2;
+    hero.body.replaceChildren(windowTabs(), areaChart(pts, ['#4fd65c', '#42a9ff', '#8c5cff'], span), legend([['#4fd65c', 'Race me'], ['#42a9ff', 'Home screen'], ['#8c5cff', 'Pehle ka (game ka minute data)']]));
     doing.body.replaceChildren(donut([{ label: 'Race me', value: racing.length, color: '#4fd65c' }, { label: 'Home screen', value: home, color: '#42a9ff' }], num(l.length), 'online'));
     const byRiver = {}; racing.forEach(u => { const r = u.river || 'Unknown'; byRiver[r] = (byRiver[r] || 0) + 1; });
     rivers.body.replaceChildren(hbars(Object.entries(byRiver).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8), '#4fd65c', 'Abhi koi race nahi kar raha.'));
@@ -1144,7 +1183,7 @@ async function liveBoard(v, live, onLeave) {
   }
 
   // ---------------------------------------------------------------- every report as it lands: the per-minute bars and the ticker
-  const was = new Map(), events = [], minutes = new Map();   // minute (ms) -> {races, ads}
+  const was = new Map(), events = [];
   let ready = false;
   listen(fb.query(col('stats_players'), fb.orderBy('lastAt', 'desc'), fb.limit(60)), snap => {
     for (const ch of snap.docChanges()) {
@@ -1153,7 +1192,7 @@ async function liveBoard(v, live, onLeave) {
       if (!ready) { events.push({ u, at: Number(u.lastAt) || 0 }); continue; }
       const d = before ? { seconds: Math.max(0, (u.seconds || 0) - (before.seconds || 0)), ads: Math.max(0, (u.ads || 0) - (before.ads || 0)), races: Math.max(0, (u.races || 0) - (before.races || 0)) } : null;
       events.unshift({ u, d, at: nowSec(), fresh: true });
-      if (d) { const m = Math.floor(Date.now() / 60000) * 60000, k = minutes.get(m) || { races: 0, ads: 0 }; k.races += d.races; k.ads += d.ads; minutes.set(m, k); }
+      if (d) { const m = Math.floor(Date.now() / 60000) * 60000, k = minutes.get(m) || { races: 0, ads: 0 }; k.races += d.races; k.ads += d.ads; minutes.set(m, k); remember(); }
     }
     events.sort((a, b) => b.at - a.at); events.splice(30);
     if (ready) totalsChanged();
@@ -1161,11 +1200,13 @@ async function liveBoard(v, live, onLeave) {
   });
   function drawMinutes() {
     const nowM = Math.floor(Date.now() / 60000) * 60000;
-    const n = Math.min(30, Math.max(10, Math.ceil((Date.now() - openedAt) / 60000) + 1));   // ten minutes at first, growing to thirty
-    const buckets = Array.from({ length: n }, (_, i) => { const m = nowM - (n - 1 - i) * 60000, k = minutes.get(m) || { races: 0, ads: 0 }; return { label: i === n - 1 ? 'abhi' : `${n - 1 - i}m`, a: k.races, b: k.ads }; });
-    for (const m of minutes.keys()) if (m < nowM - 30 * 60000) minutes.delete(m);
+    // the game's own count of each minute when it has one (it has every player), else what this board saw
+    const firstSeen = Math.min(openedAt, ...[...minutes.keys()], ...(server.size ? [...server.keys()] : []));
+    const n = server.size ? windowMin : Math.min(windowMin, Math.max(10, Math.ceil((Date.now() - firstSeen) / 60000) + 1));
+    const buckets = Array.from({ length: n }, (_, i) => { const m = nowM - (n - 1 - i) * 60000, k = server.get(m) || minutes.get(m) || { races: 0, ads: 0 }; return { label: i === n - 1 ? 'abhi' : n - 1 - i >= 60 ? `${Math.floor((n - 1 - i) / 60)}h${(n - 1 - i) % 60 ? (n - 1 - i) % 60 + 'm' : ''}` : `${n - 1 - i}m`, a: k.races, b: k.ads }; });
+    for (const m of minutes.keys()) if (m < nowM - KEEP_MS) minutes.delete(m);
     const tot = buckets.reduce((s, k) => ({ a: s.a + k.a, b: s.b + k.b }), { a: 0, b: 0 });
-    perMin.body.replaceChildren(h('div.row', { style: 'gap:18px;margin-bottom:6px' }, h('span.kpi', {}, h('b', { style: 'color:#42a9ff' }, num(tot.a)), ' races'), h('span.kpi', {}, h('b', { style: 'color:#ffd23f' }, num(tot.b)), ' ads'), h('span.faint', {}, `pichhle ${Math.min(30, Math.max(1, Math.ceil((Date.now() - openedAt) / 60000)))} minute me`)),
+    perMin.body.replaceChildren(h('div.row', { style: 'gap:18px;margin-bottom:6px' }, h('span.kpi', {}, h('b', { style: 'color:#42a9ff' }, num(tot.a)), ' races'), h('span.kpi', {}, h('b', { style: 'color:#ffd23f' }, num(tot.b)), ' ads'), h('span.faint', {}, `pichhle ${n >= 60 ? `${n / 60} ghante` : `${n} minute`} me`), h('div', { style: 'margin-left:auto' }, windowTabs())),
       minuteBars(buckets, ['#42a9ff', '#ffd23f'], ['races', 'ads']), legend([['#42a9ff', 'Races'], ['#ffd23f', 'Ads']]));
   }
   function drawTicker() {
@@ -1186,7 +1227,7 @@ async function liveBoard(v, live, onLeave) {
 
   // ---------------------------------------------------------------- go
   const tickClock = () => { clock.textContent = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' IST'; };
-  tickClock(); watchPresence(); sample(); drawPresence(); drawMinutes(); drawTicker();
+  tickClock(); watchPresence(); watchHistory(); sample(); drawPresence(); drawMinutes(); drawTicker();
   await readTotals();
   yesterday = await dayTotals(dayKey(1), true).catch(() => null);
   if (!live()) return;
@@ -1194,6 +1235,7 @@ async function liveBoard(v, live, onLeave) {
   every(1000, () => { tickClock(); tickHours(); });
   every(5000, () => { if (dayKey() !== startDay) { route(); return; } sample(); drawPresence(); drawMinutes(); });
   every(120000, watchPresence);
+  every(600000, watchHistory);   // slide the two-hour window forward
   every(60000, () => { if (Date.now() - lastRead > 55000) readTotals(); });
 }
 

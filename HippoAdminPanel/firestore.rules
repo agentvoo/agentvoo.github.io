@@ -262,6 +262,15 @@ service cloud.firestore {
         allow delete: if false;
       }
     }
+    // One minute of play (India time) for the admin panel's live graphs, in ten shards so a busy minute isn't one hot
+    // document: phones that reported in it, and what they added. Counters only, and each only grows a little.
+    match /stats_minutes/{key} {
+      allow read: if isAdmin();
+      allow delete: if false;
+      allow create, update: if key.matches('^20[0-9]{10}_[0-9]$')
+        && request.resource.data.keys().hasOnly(['players', 'seconds', 'races', 'ads'])
+        && grows('players', 1) && grows('seconds', 3600) && grows('races', 100) && grows('ads', 800);
+    }
     match /stats_months/{month} {
       match /players/{uid} {
         allow read: if isAdmin();
