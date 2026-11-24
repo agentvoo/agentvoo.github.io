@@ -60,11 +60,16 @@ service cloud.firestore {
       allow read, delete: if isAdmin();
       allow update: if false;
     }
-    // The player's progress (Pearls, Bubbles, shop items, look, ranked, stats, settings) as one string, saves/{player id},
-    // so deleting the game and installing it again brings it back. Phones read and write their own; nobody lists them.
+    // Old saves, by public player id: read once to move them into the vault, and never written again.
     match /saves/{uid} {
       allow get: if uid.matches('^[1-9][0-9]{7}$');
-      allow create, update: if uid.matches('^[1-9][0-9]{7}$')
+      allow list, create, update, delete: if false;
+    }
+    // The player's progress (Pearls, Bubbles, shop items, look, ranked, stats, settings) as one string, so deleting the game
+    // and installing it again brings it back. The document id is a private hash only that phone can work out; nobody lists them.
+    match /vault/{key} {
+      allow get: if key.matches('^[0-9a-f]{64}$');
+      allow create, update: if key.matches('^[0-9a-f]{64}$')
         && request.resource.data.keys().hasOnly(['data', 'at', 'v'])
         && request.resource.data.data is string && request.resource.data.data.size() < 200000;
       allow list, delete: if false;
@@ -106,6 +111,16 @@ service cloud.firestore {
           && request.resource.data.get('name', '').size() <= 40;
         allow delete: if true;
       }
+    }
+
+    // ADD FRIEND's list: a small public card per player, so people can find each other. Only the newest few can be read at once.
+    match /discover/{uid} {
+      allow list: if request.query.limit <= 40;
+      allow get, delete: if false;
+      allow create, update: if uid.matches('^[1-9][0-9]{7}$')
+        && request.resource.data.keys().hasOnly(['name', 'seen', 'level', 'avatar', 'frame', 'rp'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40
+        && request.resource.data.seen.matches('^[0-9]{10}$');
     }
 
     // Which player id a phone had, so deleting and installing the game again keeps the id. The key is a hash of the

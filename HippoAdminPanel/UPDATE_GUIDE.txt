@@ -1,43 +1,50 @@
-ADMIN PANEL UPDATE: ANALYTICS + HELP & SUPPORT
-==============================================
-Pehle se panel chal raha hai, isliye sirf ye 4 kaam karo, ISI ORDER me.
+ADMIN PANEL UPDATE: SAB KUCH LIVE (REALTIME) ANALYTICS
+=====================================================
+Is update me koi naya rule deploy NAHI karna. Bas ye 2 kaam karo.
 
-1) NAYE RULES DEPLOY KARO
-   cd ~/Downloads/RaftParty_Game/RaftGame_Assets/RaftParty_UnityProject/Firebase
-   firebase deploy --only firestore:rules --project fart2-d0d9f
-
-2) GITHUB PE 3 FILES BADLO
+1) GITHUB PE 2 FILES BADLO
    Repo agentvoo.github.io > HippoAdminPanel > website
    Zip ke website folder se ye upload karke purani replace karo:
       style.css
       js/app.js
-      js/firebase.js
-   (js wali dono files repo ke js folder me hi jaani chahiye.)
+   (app.js repo ke js folder me hi jaani chahiye. firebase.js same hai, mat chhedo.)
    1-2 minute baad panel kholo aur Cmd+Shift+R dabao.
 
-3) PLAY CONSOLE: DATA SAFETY + PRIVACY POLICY UPDATE KARO (zaroori)
-   Game ab ye data bhejta hai. App content > Data safety me add karo:
-     - Personal info: User IDs, Name (player ka game naam)
-     - Location: Approximate location (sirf country)
-     - App activity: App interactions (time, races)
-     - App activity: Other user-generated content (support message)
-     - App info and performance: Diagnostics
-     - Device or other IDs: nahi; phone model support message ke saath jata hai
-   Purpose: Analytics, App functionality, Customer support.
-   Privacy policy me bhi ye sab likho. Ye naya game release karne se PEHLE karna hai.
+2) NAYA GAME UPDATE DAALO (zyada live data ke liye)
+   Game ab har 1 minute pe data bhejta hai (pehle 3 minute), aur race ya full-screen ad
+   ke ~10 second baad turant. Purane version wale players ka data 3 minute me aata rahega.
 
-4) NAYA GAME UPDATE DAALO
-   Ads, time, country aur support ka data naye version se hi aayega.
-   Live players aur total players abhi se dikhenge.
+PANEL ME KYA LIVE HUA
+  Analytics
+    - Live now: kaun abhi game me hai, kitne race me, kitne home pe. Har change turant.
+    - Playing now list: naam, level, kaunsi river pe race, kitne second pehle dikha.
+    - Live activity: jaise hi kisi player ka data aata hai, yahan dikhta hai
+      (+5m played, +2 races, +1 ad).
+    - Tiles (Played today, New, Races, Ads, Hours...): naya data aate hi 10 second ke andar update.
+    - Top players: LIVE ranking. Koi aage badha to row chamakti hai aur upar/neeche ka arrow.
+        All time / Today, Top 25 / 50 / 100, Most hours / ads / races / sessions / level.
+        Last seen ab game ki heartbeat se (40 second wali), green dot = abhi online,
+        "LIVE · racing CANYON GATES" jaisa dikhega.
+        Naam ya ID se search, aur Export CSV (Excel me khulta hai).
+    - Countries aur game versions: live.
+    - Aaj ka graph bar bhi live.
+    - Upar LIVE pill: internet gaya to RECONNECTING dikhega, wapas aate hi khud jud jayega.
+  Dashboard     Online now, Support waiting add hue. Forms aur Last actions live.
+  Players       Recently active list live (green dot = online). Player kholo to uska
+                time, races, ads (type ke saath), sessions, country, version, first day,
+                last report sab live dikhta hai.
+  Activity Log  Live.
+  Menu badges   Forms / Support ke number har minute khud update.
 
-PANEL ME NAYA
-  Analytics       Live now, aaj, mahine ke players, naye players, avg time, races
-                  Rewarded, Interstitial, Banner, Native: today / yesterday / 7 days / month / all time
-                  30 din ka graph, countries, top players, Day 1 / Day 7 wapsi, game versions
-  Help & Support  Player ka message, uski ID, country, phone, version sab ke saath.
-                  Reply karo to uske game MAIL me jata hai, notification ke saath.
+KITNE BHI PLAYERS HON
+  Har live list me limit hai (live players 1000 tak list, top 100), aur bade totals
+  Firebase server pe hi gine jaate hain. Isliye 100 players ho ya 10 lakh, panel utna hi
+  tez chalega aur Firebase reads control me rahenge. 1000 se zyada online hon to
+  "Live now" number server se ginti karke dikhata hai.
 
 DHYAN RAKHNA
-  - Live number har 20 second me update hota hai.
+  - Game ab zyada baar data bhejta hai, to Firebase writes thode badhenge
+    (har online player ~2 writes per minute). Free plan me roz 20,000 writes hain;
+    zyada players aaye to Blaze plan lena padega (bahut sasta: ~$0.18 per 1 lakh writes).
   - Ads ka number game ka count hai. Paisa kitna bana, wo AdMob me hi sahi dikhega.
-  - Country SIM ya phone ki region se aati hai, GPS se nahi.
+  - Din India time se chalta hai. Raat 12 baje panel khud naye din pe chala jata hai.

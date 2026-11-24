@@ -227,6 +227,7 @@ function shell() {
   root.replaceChildren(top, h('div.shell', {}, side, view));
   window.onhashchange = route;
   route(); refreshBadge();
+  setInterval(() => { if (!document.hidden && me) refreshBadge(); }, 60000);   // the menu's waiting counts stay current
 }
 async function refreshBadge() {
   const n = await count(fb.query(col('wow_apply'), fb.where('status', '==', 'pending')));
@@ -246,24 +247,39 @@ async function route() {
 }
 
 // ------------------------------------------------------------------ dashboard
-async function dashboard(v, live) {
-  const [pending, creators, partners, players_, rivers_, mails, rr, pr] = await Promise.all([
-    count(fb.query(col('wow_apply'), fb.where('status', '==', 'pending'))), count(col('wow_creators')), count(col('partners')), count(col('users')),
-    count(col('wow_rivers')), count(col('mail')), count(col('wow_reports')), count(col('photo_reports'))]);
-  if (!live()) return;
+async function dashboard(v, live, onLeave) {
+  // Live: the waiting forms and the last actions come by listener; the counts are re-counted on the server every 30 s.
+  const stats = h('div.stats'), formsBox = h('div.card.stack', {}, loading()), logsBox = h('div.card.stack', {}, loading());
+  v.replaceChildren(head('Dashboard', 'Game ka sab kuch ek jagah.', h('span.livepill', {}, h('i'), 'LIVE')), stats,
+    h('div.two', {}, formsBox, h('div.stack', {},
+      h('div.card.stack', {}, h('h2', {}, 'Quick actions'), h('div.row', {}, h('button.btn.gold', { onclick: () => go('gift') }, icon('gift'), 'Send gift'), h('button.btn', { onclick: () => go('notify') }, icon('bell'), 'Notification'), h('button.btn', { onclick: () => go('analytics') }, icon('chart'), 'Analytics'), h('button.btn', { onclick: () => go('support') }, icon('help'), 'Support'), h('button.btn', { onclick: () => go('partners') }, icon('crown'), 'Add partner'))),
+      logsBox)));
   const stat = (n, label, page, c, alert) => h('button.stat', { class: alert ? 'alert' : '', style: `--c:${c}`, onclick: () => go(page) }, h('b', {}, n === null ? '-' : n.toLocaleString('en-IN')), h('span', {}, label));
-  const recent = await docs(fb.query(col('wow_apply'), fb.where('status', '==', 'pending'), fb.limit(5))).catch(() => []);
-  const logs = await docs(fb.query(col('admin_log'), fb.orderBy('at', 'desc'), fb.limit(6))).catch(() => []);
-  if (!live()) return;
-  v.replaceChildren(head('Dashboard', 'Game ka sab kuch ek jagah.'),
-    h('div.stats', {}, stat(pending, 'Forms waiting', 'forms', 'var(--gold)', pending > 0), stat(players_, 'Players', 'players', 'var(--blue)'), stat(creators, 'Creators', 'creators', 'var(--pink)'), stat(partners, 'Partners', 'partners', 'var(--gold)'),
-      stat(rivers_, 'Creator rivers', 'rivers', '#5ce0d8'), stat(mails, 'Mails sent', 'history', 'var(--green)'), stat((rr || 0) + (pr || 0), 'Reports', 'reports', 'var(--red)', (rr || 0) + (pr || 0) > 0)),
-    h('div.two', {},
-      h('div.card.stack', {}, h('div.row.between', {}, h('h2', {}, 'Forms waiting'), h('button.btn.small', { onclick: () => go('forms') }, 'See all')),
-        recent.length ? h('div.list', {}, recent.map(a => h('div.item', {}, avatar(a.name), h('div.grow', {}, h('div.name', {}, a.name || 'Player'), h('div.faint.mono', {}, showId(a.id))), h('span.tag.y', {}, 'pending')))) : empty('Koi form pending nahi hai.')),
-      h('div.stack', {},
-        h('div.card.stack', {}, h('h2', {}, 'Quick actions'), h('div.row', {}, h('button.btn.gold', { onclick: () => go('gift') }, icon('gift'), 'Send gift'), h('button.btn', { onclick: () => go('notify') }, icon('bell'), 'Notification'), h('button.btn', { onclick: () => go('analytics') }, icon('chart'), 'Analytics'), h('button.btn', { onclick: () => go('support') }, icon('help'), 'Support'), h('button.btn', { onclick: () => go('partners') }, icon('crown'), 'Add partner'))),
-        h('div.card.stack', {}, h('h2', {}, 'Last actions'), logs.length ? h('div.list', {}, logs.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.faint', {}, whenText(l.at)))))) : h('p.faint', {}, 'Abhi kuch nahi.')))));
+  async function counts() {
+    const nowS = Math.floor(Date.now() / 1000);
+    const [pending, creators, partners, players_, rivers_, mails, rr, pr, onlineNow, openSupport] = await Promise.all([
+      count(fb.query(col('wow_apply'), fb.where('status', '==', 'pending'))), count(col('wow_creators')), count(col('partners')), count(col('users')),
+      count(col('wow_rivers')), count(col('mail')), count(col('wow_reports')), count(col('photo_reports')), count(fb.query(col('users'), fb.where('seen', '>=', String(nowS - 100)))), count(fb.query(col('support'), fb.where('status', '==', 'open')))]);
+    if (!live()) return;
+    stats.replaceChildren(stat(onlineNow, 'Online now', 'analytics', 'var(--green)'), stat(pending, 'Forms waiting', 'forms', 'var(--gold)', pending > 0), stat(openSupport, 'Support waiting', 'support', 'var(--blue)', openSupport > 0), stat(players_, 'Players', 'players', 'var(--blue)'), stat(creators, 'Creators', 'creators', 'var(--pink)'), stat(partners, 'Partners', 'partners', 'var(--gold)'),
+      stat(rivers_, 'Creator rivers', 'rivers', '#5ce0d8'), stat(mails, 'Mails sent', 'history', 'var(--green)'), stat((rr || 0) + (pr || 0), 'Reports', 'reports', 'var(--red)', (rr || 0) + (pr || 0) > 0));
+  }
+  const stops = [];
+  stops.push(fb.onSnapshot(fb.query(col('wow_apply'), fb.where('status', '==', 'pending'), fb.limit(5)), snap => {
+    if (!live()) return;
+    const recent = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    formsBox.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Forms waiting'), h('button.btn.small', { onclick: () => go('forms') }, 'See all')),
+      recent.length ? h('div.list', {}, recent.map(a => h('div.item', {}, avatar(a.name), h('div.grow', {}, h('div.name', {}, a.name || 'Player'), h('div.faint.mono', {}, showId(a.id))), h('span.tag.y', {}, 'pending')))) : empty('Koi form pending nahi hai.'));
+    counts().catch(console.warn);
+  }, e => formsBox.replaceChildren(h('div.note.danger', {}, friendly(e)))));
+  stops.push(fb.onSnapshot(fb.query(col('admin_log'), fb.orderBy('at', 'desc'), fb.limit(6)), snap => {
+    if (!live()) return;
+    const logs = snap.docs.map(d => d.data());
+    logsBox.replaceChildren(h('h2', {}, 'Last actions'), logs.length ? h('div.list', {}, logs.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.faint', {}, whenText(l.at)))))) : h('p.faint', {}, 'Abhi kuch nahi.'));
+  }, e => logsBox.replaceChildren(h('div.note.danger', {}, friendly(e)))));
+  await counts();
+  const timer = setInterval(() => { if (live() && !document.hidden) counts().catch(console.warn); }, 30000);
+  onLeave(() => { clearInterval(timer); stops.forEach(s => s()); });
 }
 
 // ------------------------------------------------------------------ gift, mail and notification
@@ -447,7 +463,10 @@ async function forms(v, live) {
 }
 
 // ------------------------------------------------------------------ players
-async function players(v, live) {
+async function players(v, live, onLeave) {
+  let stopView = [];   // the listeners of what is on screen: the recent list, or one player
+  const stopAll = () => { stopView.forEach(x => x()); stopView = []; };
+  onLeave(stopAll);
   const input = h('input', { placeholder: 'Player ID ya naam', 'aria-label': 'Search player', onkeydown: e => { if (e.key === 'Enter') find(); } });
   const out = h('div', {}, loading());
   const find = act(async () => {
@@ -463,19 +482,38 @@ async function players(v, live) {
     const rows = await docs(fb.query(col('users'), fb.orderBy('name'), fb.startAt(text), fb.endAt(`${text}`), fb.limit(30)));
     out.replaceChildren(h('div.card', {}, rows.length ? listOf(rows) : empty('Is naam se koi nahi mila. Naam capital/small letters sahit same likho.')));
   });
-  const listOf = rows => h('div.list', {}, rows.map(u => h('div.item', {}, avatar(u.name), h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint.mono', {}, showId(u.id))), h('span.tag', {}, `Lv ${u.level || '-'}`), h('span.faint', {}, agoText(u.seen)), h('button.btn.small', { onclick: act(() => open(u)) }, 'Open'))));
+  const onlineNow = u => u.state !== 'off' && Math.floor(Date.now() / 1000) - Number(u.seen || 0) <= 100;
+  const listOf = rows => h('div.list', {}, rows.map(u => h('div.item', {}, h('span.dot', { class: onlineNow(u) ? 'on' : '' }), avatar(u.name), h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint.mono', {}, showId(u.id))), h('span.tag', {}, `Lv ${u.level || '-'}`), onlineNow(u) ? h('span.tag.g', {}, u.state === 'race' ? 'racing' : 'online') : h('span.faint', {}, seenText(u.seen)), h('button.btn.small', { onclick: act(() => open(u)) }, 'Open'))));
   async function showRecent() {
-    const rows = await docs(fb.query(col('users'), fb.orderBy('seen', 'desc'), fb.limit(25)));
-    if (live()) out.replaceChildren(h('div.card.stack', {}, h('h2', {}, 'Recently active'), rows.length ? listOf(rows) : empty('Abhi koi player nahi.')));
+    stopAll();
+    let rows = [];
+    const draw = () => { if (live()) out.replaceChildren(h('div.card.stack', {}, h('div.row.between', {}, h('h2', {}, 'Recently active'), h('span.livepill.small', {}, h('i'), 'LIVE')), rows.length ? listOf(rows) : empty('Abhi koi player nahi.'))); };
+    stopView.push(fb.onSnapshot(fb.query(col('users'), fb.orderBy('seen', 'desc'), fb.limit(40)), snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })); draw(); }, e => out.replaceChildren(h('div.note.danger', {}, friendly(e)))));
+    const tick = setInterval(draw, 5000); stopView.push(() => clearInterval(tick));
   }
   async function open(u) {
+    stopAll();
     const [c, p, ban, photo] = await Promise.all([fb.getDoc(ref('wow_creators', u.id)), fb.getDoc(ref('partners', u.id)), fb.getDoc(ref('photo_bans', u.id)), fb.getDoc(ref('photos', u.id))]);
     const isC = c.exists(), isP = p.exists(), banned = ban.exists(), image = photo.exists() ? photo.data().pic : '';
     const again = () => open(u);
     const stat = (k, val) => h('div', {}, h('div.faint', {}, k), h('div.name', {}, val));
+    // live: the heartbeat (level, last seen, home or racing) and the game's stats report, as they change
+    const liveFields = h('div.fields'), statsBox = h('div.fields');
+    const drawLiveFields = () => { if (!live()) return; const on = onlineNow(u); liveFields.replaceChildren(stat('Level', u.level || '-'), stat('Rank Points', Number(u.rp) >= 0 ? u.rp : 'Not ranked'), stat('Last seen', on ? 'online now' : seenText(u.seen)), stat('Now', !on ? 'Offline' : u.state === 'race' ? `Racing ${u.river || ''}` : 'Home')); };
+    drawLiveFields();
+    stopView.push(fb.onSnapshot(ref('users', u.id), snap => { if (snap.exists()) { Object.assign(u, snap.data()); drawLiveFields(); } }, console.warn));
+    stopView.push(fb.onSnapshot(ref('stats_players', u.id), snap => {
+      if (!live()) return;
+      if (!snap.exists()) { statsBox.replaceChildren(h('p.faint', {}, 'Is player ka game stats abhi nahi aaya (purana game version).')); return; }
+      const x = snap.data();
+      statsBox.replaceChildren(stat('Country', `${flag(x.country)} ${countryName(x.country)}`), stat('Time played', hours(x.seconds)), stat('Races', num(x.races || 0)), stat('Sessions', num(x.sessions || 0)),
+        stat('Ads seen', `${num(x.ads || 0)} (R ${num(x.rewarded || 0)} · I ${num(x.interstitial || 0)} · B ${num(x.banner || 0)} · N ${num(x.native || 0)})`), stat('Game version', x.version ? `v${x.version}` : '-'),
+        stat('First day', x.firstDay ? dayLabel(String(x.firstDay)) : '-'), stat('Last report', seenText(x.lastAt)));
+    }, console.warn));
+    const tick = setInterval(drawLiveFields, 5000); stopView.push(() => clearInterval(tick));
     out.replaceChildren(h('div.card.stack', {},
       h('div.row', {}, avatar(u.name, image), h('div.grow', {}, h('h2', {}, u.name || 'Player'), h('div.faint.mono', {}, `ID ${showId(u.id)}`)), isC ? h('span.tag.p', {}, 'Creator') : null, isP ? h('span.tag.y', {}, 'Partner') : null, banned ? h('span.tag.r', {}, 'Photo banned') : null),
-      h('div.fields', {}, stat('Level', u.level || '-'), stat('Rank Points', Number(u.rp) >= 0 ? u.rp : 'Not ranked'), stat('Last seen', agoText(u.seen)), stat('Now', u.state === 'race' ? `Racing ${u.river || ''}` : 'Home')),
+      liveFields, statsBox,
       h('div.row', {},
         h('button.btn.gold', { onclick: () => go('gift', { id: u.id }) }, icon('gift'), 'Send gift'),
         h(`button.btn.${isC ? 'bad' : 'go'}`, { onclick: act(async () => { if (!await ask({ title: isC ? 'Creator hatana hai?' : 'Creator banayein?', body: u.name || showId(u.id), danger: isC })) return; await (isC ? revoke : grant)('creators', u.id); toast('Done'); await again(); }) }, isC ? 'Remove Creator' : 'Make Creator'),
@@ -600,10 +638,14 @@ async function settings(v, live) {
     h('div.card.stack', {}, h('h2', {}, 'Ranked season'), h('p.muted', {}, 'Season 1 kab shuru hua. Har season 60 din ka hai.'), field('Season 1 start', start), h('button.btn.bad', { onclick: saveSeason }, 'Change date'))));
 }
 
-async function activity(v, live) {
-  const rows = await docs(fb.query(col('admin_log'), fb.orderBy('at', 'desc'), fb.limit(150)));
-  if (!live()) return;
-  v.replaceChildren(head('Activity Log', 'Panel se jo bhi hua, sab yahan likha rehta hai.'), h('div.card', {}, rows.length ? h('div.list', {}, rows.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.muted', { style: 'overflow-wrap:anywhere' }, l.detail || '')), h('span.faint', {}, whenText(l.at))))) : empty('Abhi kuch nahi hua.')));
+async function activity(v, live, onLeave) {
+  const box = h('div.card', {}, loading());
+  v.replaceChildren(head('Activity Log', 'Panel se jo bhi hua, sab yahan likha rehta hai.', h('span.livepill', {}, h('i'), 'LIVE')), box);
+  onLeave(fb.onSnapshot(fb.query(col('admin_log'), fb.orderBy('at', 'desc'), fb.limit(150)), snap => {
+    if (!live()) return;
+    const rows = snap.docs.map(d => d.data());
+    box.replaceChildren(rows.length ? h('div.list', {}, rows.map(l => h('div.item', {}, h('div.grow', {}, h('div.name', {}, l.action), h('div.muted', { style: 'overflow-wrap:anywhere' }, l.detail || '')), h('span.faint', {}, whenText(l.at))))) : empty('Abhi kuch nahi hua.'));
+  }, e => box.replaceChildren(h('div.note.danger', {}, friendly(e)))));
 }
 
 // ------------------------------------------------------------------ analytics
@@ -656,14 +698,129 @@ function dayChart(days, metric) {
   return h('div.chart', {}, h('div.tipwrap', {}, tip), plot, axis, table);
 }
 
-async function analytics(v, live, onLeave) {
-  const stamp = h('span.faint', {}, 'Updating...');
-  const tiles = h('div.stats'), adsBox = h('div.card.stack'), trend = h('div.card.stack'), geo = h('div.card.stack'), top = h('div.card.stack'), health = h('div.card.stack'), now = h('div.card.stack');
-  v.replaceChildren(head('Analytics', 'Game ka poora data, live.', h('div.row', {}, h('span.livepill', {}, h('i'), 'LIVE'), stamp)),
-    h('div.note', { style: 'margin-bottom:14px' }, 'Ads, time, country aur top players ka data naye game update se aana shuru hoga. Din India time se chalta hai.'),
-    tiles, h('div.two', { style: 'margin-bottom:16px' }, trend, adsBox), h('div.two', { style: 'margin-bottom:16px' }, geo, h('div.stack', {}, health, now)), top);
+// Everything on this page is live: Firestore listeners push each change the moment the game sends it, instead of the page
+// asking again on a timer. Every listener reads a bounded number of documents and the big totals are counted and summed on
+// the server, so the page costs the same with a hundred players or a million.
+const nowSec = () => Math.floor(Date.now() / 1000);
+const LIVE_SECONDS = 100;      // the game beats every 40 s: two missed beats and the player has gone
+const PRESENCE_CAP = 1000;     // players the live list holds; past this the live number is counted on the server
+const TOP_SIZES = [25, 50, 100];
+function seenText(sec) {
+  const n = Number(sec); if (!n) return 'never';
+  const s = Math.max(0, nowSec() - n);
+  if (s < 10) return 'just now'; if (s < 60) return `${s}s ago`; if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`; return `${Math.floor(s / 86400)} days ago`;
+}
+const chunks = (list, n) => Array.from({ length: Math.ceil(list.length / n) }, (_, i) => list.slice(i * n, i * n + n));
+function csv(rows) {
+  const cell = x => { const s = String(x ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const blob = new Blob([rows.map(r => r.map(cell).join(',')).join('\n')], { type: 'text/csv' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: `hippo-top-players-${dayKey()}.csv` }); document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
 
-  let days = [], metricId = 'players', geoTab = 'today', sortBy = 'seconds';
+async function analytics(v, live, onLeave) {
+  const startDay = dayKey();
+  const stops = [], timers = [];
+  onLeave(() => { stops.splice(0).forEach(s => { try { s(); } catch { /* gone */ } }); timers.splice(0).forEach(clearInterval); });
+  let lastPush = Date.now(), healthy = true;
+  const status = h('span.livepill', {}, h('i'), 'LIVE'), stamp = h('span.faint', {}, 'Connecting...');
+  function setHealthy(ok) {
+    if (ok === healthy) return; healthy = ok;
+    status.className = ok ? 'livepill' : 'livepill off';
+    status.replaceChildren(h('i'), ok ? 'LIVE' : 'RECONNECTING');
+  }
+  /** A Firestore listener that stops when the page is left. Returns its own stop. */
+  function listen(q, next) {
+    const stop = fb.onSnapshot(q, { includeMetadataChanges: true }, snap => {
+      if (!live()) return;
+      setHealthy(!snap.metadata.fromCache || navigator.onLine);
+      if (snap.metadata.hasPendingWrites) return;
+      lastPush = Date.now(); stamp.textContent = 'Updated just now'; next(snap);
+    }, e => { console.warn(e); setHealthy(false); stamp.textContent = friendly(e); });
+    stops.push(stop);
+    return () => { stop(); const i = stops.indexOf(stop); if (i >= 0) stops.splice(i, 1); };
+  }
+  const every = (ms, fn) => timers.push(setInterval(() => { if (live()) fn(); }, ms));
+
+  const tiles = h('div.stats'), adsBox = h('div.card.stack'), trend = h('div.card.stack'), geo = h('div.card.stack'), top = h('div.card.stack'),
+    health = h('div.card.stack'), now = h('div.card.stack'), feed = h('div.card.stack');
+  v.replaceChildren(head('Analytics', 'Game ka poora data, live: har change turant yahan aata hai.', h('div.row', {}, status, stamp)),
+    tiles, h('div.two', { style: 'margin-bottom:16px' }, now, feed), top, h('div.two', { style: 'margin:16px 0' }, trend, adsBox), h('div.two', {}, geo, health));
+  [now, feed, top, trend, adsBox, geo, health].forEach(c => c.append(loading()));
+
+  // ---------------------------------------------------------------- who is in the game right now
+  // users/{id}.seen is the game's heartbeat (every 40 s, and at once when a race starts or ends). One listener over the
+  // last few minutes of beats; the window slides forward every two minutes, and players drop out of it on this clock.
+  const online = new Map();
+  let presenceCapped = false, serverLive = null, stopPresence = null;
+  function watchPresence() {
+    if (stopPresence) stopPresence();
+    const since = String(nowSec() - 180);
+    stopPresence = listen(fb.query(col('users'), fb.where('seen', '>=', since), fb.orderBy('seen', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
+      online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() }));
+      presenceCapped = snap.size >= PRESENCE_CAP;
+      drawLive(); drawTop();
+    });
+  }
+  const isLive = u => u && u.state !== 'off' && nowSec() - Number(u.seen || 0) <= LIVE_SECONDS;
+  const livePlayers = () => [...online.values()].filter(isLive).sort((a, b) => (b.state === 'race') - (a.state === 'race') || Number(b.seen) - Number(a.seen));
+  function drawLive() {
+    const list = livePlayers(), racing = list.filter(u => u.state === 'race').length;
+    const shown = presenceCapped && serverLive !== null ? serverLive : list.length;
+    liveTile.b.textContent = presenceCapped && serverLive !== null ? num(serverLive) : num(list.length) + (presenceCapped ? '+' : '');
+    liveTile.small.textContent = `${num(racing)} racing · ${num(Math.max(0, list.length - racing))} on home`;
+    now.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Playing now'), h('span.tag.g', {}, `${num(shown)} online`)),
+      list.length ? h('div.list.livelist', {}, list.slice(0, 60).map(u => h('button.item.linkrow', { onclick: () => go('players', { id: u.id }) }, h('span.dot.on', { 'aria-hidden': 'true' }), avatar(u.name),
+        h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint', {}, u.state === 'race' ? `Racing ${u.river || ''}`.trim() : 'On home screen', ` · Lv ${u.level || '-'}`)),
+        h('span.tag', { class: u.state === 'race' ? 'g' : 'b' }, u.state === 'race' ? 'race' : 'home'), h('span.faint.mono', {}, seenText(u.seen))))) : empty('Abhi koi online nahi.'),
+      ...(list.length > 60 ? [h('p.faint', {}, `+${num(list.length - 60)} aur players online`)] : []));
+  }
+
+  // ---------------------------------------------------------------- the totals (counted and summed on the server)
+  const tile = (label, c) => { const b = h('b', {}, '-'), small = h('small', {}, ''); return { b, small, el: h('div.stat.flat', { style: `--c:${c}` }, b, h('span', {}, label), small) }; };
+  const liveTile = tile('Live now', 'var(--green)'), T = {
+    today: tile('Played today', 'var(--blue)'), month: tile('Played this month', 'var(--pink)'), fresh: tile('New today', '#5ce0d8'), users: tile('Total players', 'var(--gold)'),
+    avg: tile('Avg time today', 'var(--gold)'), races: tile('Races today', 'var(--blue)'), ads: tile('Ads today', 'var(--green)'), hours: tile('Hours today', 'var(--pink)'),
+  };
+  tiles.replaceChildren(liveTile.el, ...Object.values(T).map(t => t.el));
+  let days = [], held = null, totalsBusy = false, totalsAgain = false, lastTotals = 0;
+  const setTile = (t, text, sub) => { if (t.b.textContent !== text && t.b.textContent !== '-') { t.el.classList.remove('flash'); void t.el.offsetWidth; t.el.classList.add('flash'); } t.b.textContent = text; t.small.textContent = sub || ''; };
+  async function readTotals() {
+    if (totalsBusy) { totalsAgain = true; return; }
+    totalsBusy = true; lastTotals = Date.now();
+    try {
+      const [today, all, month, users] = await Promise.all([dayTotals(dayKey(), true), totals('stats_players'), count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
+      if (presenceCapped) serverLive = await count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec() - LIVE_SECONDS))));
+      if (!live()) return;
+      held = { today, all, month, users };
+      if (days.length) days[days.length - 1].t = today;
+      drawTotals();
+    } catch (e) { console.warn(e); } finally { totalsBusy = false; if (totalsAgain) { totalsAgain = false; setTimeout(readTotals, 3000); } }
+  }
+  // New data from the game: the totals follow within seconds, but at most once every 10 s however busy it gets.
+  let totalsSoon = null;
+  function totalsChanged() {
+    if (totalsSoon) return;
+    totalsSoon = setTimeout(() => { totalsSoon = null; if (live()) readTotals(); }, Math.max(1500, 10000 - (Date.now() - lastTotals)));
+  }
+  onLeave(() => clearTimeout(totalsSoon));
+  function drawTotals() {
+    if (!held) return;
+    const { today, all, month, users } = held;
+    setTile(T.today, num(today.players)); setTile(T.month, num(month)); setTile(T.fresh, num(today.fresh)); setTile(T.users, num(users));
+    setTile(T.avg, hours(today.players ? Math.round(today.seconds / today.players) : 0), 'per player'); setTile(T.races, num(today.races));
+    setTile(T.ads, num(adsOf(today)), today.players ? `${(adsOf(today) / today.players).toFixed(1)} per player` : ''); setTile(T.hours, (today.seconds / 3600).toFixed(1), 'all players together');
+    const yesterday = days.length > 1 ? days[days.length - 2].t : EMPTY_DAY, week = addUp(days.slice(-7).map(d => d.t)), thisMonth = addUp(days.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).map(d => d.t));
+    const cols = [today, yesterday, week, thisMonth, all];
+    adsBox.replaceChildren(h('h2', {}, 'Ads seen'), h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Type'), ['Today', 'Yesterday', '7 days', 'Month', 'All time'].map(x => h('th.n', {}, x)))),
+      h('tbody', {}, [['Rewarded', 'rewarded'], ['Interstitial', 'interstitial'], ['Banner', 'banner'], ['Native Advanced', 'native']].map(([l, k]) => h('tr', {}, h('td', {}, l), cols.map(c => h('td.n.mono', {}, num(c[k] || 0))))), h('tr.total', {}, h('td', {}, 'Total'), cols.map(c => h('td.n.mono', {}, num(adsOf(c)))))))),
+      h('p.faint', {}, 'Game me ad dikhne par count hota hai. Earnings ke liye AdMob hi sahi number hai.'));
+    drawTrend();
+  }
+
+  // ---------------------------------------------------------------- 30 days
+  let metricId = 'players';
   const METRICS = {
     players: { name: 'Players', whole: true, get: d => d.players, text: num, axis: x => num(Math.round(x)) },
     fresh: { name: 'New players', whole: true, get: d => d.fresh, text: num, axis: x => num(Math.round(x)) },
@@ -672,83 +829,148 @@ async function analytics(v, live, onLeave) {
     races: { name: 'Races', whole: true, get: d => d.races, text: num, axis: x => num(Math.round(x)) },
   };
   function drawTrend() {
-    trend.replaceChildren(h('h2', {}, 'Last 30 days'), h('div.tabs', { style: 'margin:0' }, Object.entries(METRICS).map(([k, m]) => h('button.tab', { class: metricId === k ? 'on' : '', onclick: () => { metricId = k; drawTrend(); } }, m.name))), days.length ? dayChart(days.slice(-30), METRICS[metricId]) : loading());
+    trend.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Last 30 days'), h('span.faint', {}, 'aaj ka bar live hai')),
+      h('div.tabs', { style: 'margin:0' }, Object.entries(METRICS).map(([k, m]) => h('button.tab', { class: metricId === k ? 'on' : '', onclick: () => { metricId = k; drawTrend(); } }, m.name))), days.length ? dayChart(days.slice(-30), METRICS[metricId]) : loading());
   }
-  async function drawGeo() {
-    const path = { today: `stats_days/${dayKey()}/dims`, month: `stats_months/${dayKey().slice(0, 6)}/dims`, all: 'stats_all' }[geoTab];
-    const rows = (await docs(fb.query(col(path), fb.limit(260)))).filter(x => x.id.startsWith('c_')).map(x => ({ c: x.id.slice(2), n: x.n || 0 })).sort((a, b) => b.n - a.n);
-    if (!live()) return;
-    const sum = rows.reduce((s, r) => s + r.n, 0), big = rows[0]?.n || 1;
-    geo.replaceChildren(h('h2', {}, 'Countries'), h('div.tabs', { style: 'margin:0' }, [['today', 'Today'], ['month', 'This month'], ['all', 'All time']].map(([k, l]) => h('button.tab', { class: geoTab === k ? 'on' : '', onclick: act(async () => { geoTab = k; await drawGeo(); }) }, l))),
-      rows.length ? h('div.meters', {}, rows.slice(0, 15).map(r => h('div.meter', {}, h('span.mflag', { 'aria-hidden': 'true' }, flag(r.c)), h('span.mname', {}, countryName(r.c)), h('span.track', {}, h('i', { style: `width:${Math.max(r.n / big * 100, 2)}%` })), h('b.mono', {}, num(r.n)), h('span.faint.mono.pct', {}, `${Math.round(r.n / sum * 100)}%`)))) : empty('Abhi data nahi aaya.'));
-  }
-  async function drawTop() {
-    const rows = await docs(fb.query(col('stats_players'), fb.orderBy(sortBy, 'desc'), fb.limit(25)));
-    if (!live()) return;
-    top.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Top players'), h('div.tabs', { style: 'margin:0' }, [['seconds', 'Most hours'], ['ads', 'Most ads'], ['races', 'Most races']].map(([k, l]) => h('button.tab', { class: sortBy === k ? 'on' : '', onclick: act(async () => { sortBy = k; await drawTop(); }) }, l)))),
-      rows.length ? h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, ['#', 'Player', 'Country'].map(x => h('th', {}, x)), ['Hours', 'Ads', 'Races', 'Sessions', 'Level'].map(x => h('th.n', {}, x)), h('th', {}, 'Last seen'))),
-        h('tbody', {}, rows.map((u, i) => h('tr.link', { tabindex: 0, onclick: () => go('players', { id: u.id }), onkeydown: e => { if (e.key === 'Enter') go('players', { id: u.id }); } },
-          h('td.mono', {}, i + 1), h('td', {}, h('div.name', {}, u.name || 'Player'), h('div.faint.mono', {}, showId(u.id))), h('td', {}, `${flag(u.country)} ${countryName(u.country)}`),
-          h('td.n.mono', {}, hours(u.seconds)), h('td.n.mono', {}, num(u.ads || 0)), h('td.n.mono', {}, num(u.races || 0)), h('td.n.mono', {}, num(u.sessions || 0)), h('td.n.mono', {}, u.level || '-'), h('td.faint', {}, agoText(u.lastAt))))))) : empty('Abhi data nahi aaya.'));
-  }
-  async function drawNow() {
-    const since = String(Math.floor(Date.now() / 1000) - 100);
-    const rows = await docs(fb.query(col('users'), fb.where('seen', '>=', since), fb.orderBy('seen', 'desc'), fb.limit(12)));
-    if (!live()) return;
-    const on = rows.filter(u => u.state !== 'off');
-    now.replaceChildren(h('h2', {}, 'Playing now'), on.length ? h('div.list', {}, on.map(u => h('div.item', {}, avatar(u.name), h('div.grow', {}, h('div.name', {}, u.name || 'Player'), h('div.faint', {}, u.state === 'race' ? `Racing ${u.river || ''}` : 'On home screen')), h('span.tag', { class: u.state === 'race' ? 'g' : 'b' }, u.state === 'race' ? 'race' : 'home')))) : empty('Abhi koi online nahi.'));
-  }
-  let held = null;   // the totals: read once a minute; the live number every 20 seconds
-  async function refresh(full, heavy = true) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const liveWait = count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec - 100))));
-    if (heavy || !held) {
-      const [t, a, m, u] = await Promise.all([dayTotals(dayKey(), true), totals('stats_players'), count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
-      held = { today: t, all: a, month: m, users: u };
+
+  // ---------------------------------------------------------------- live activity: every report the game sends, as it lands
+  // stats_players ordered by lastAt: the newest reports. Each change shows what that player added since their last one.
+  const was = new Map(), events = [];
+  let feedReady = false;
+  listen(fb.query(col('stats_players'), fb.orderBy('lastAt', 'desc'), fb.limit(40)), snap => {
+    for (const ch of snap.docChanges()) {
+      if (ch.type === 'removed') continue;
+      const u = { id: ch.doc.id, ...ch.doc.data() }, before = was.get(u.id);
+      was.set(u.id, u);
+      if (!feedReady) { events.push({ u, d: null, at: Number(u.lastAt) || 0 }); continue; }
+      const d = before ? { seconds: (u.seconds || 0) - (before.seconds || 0), ads: (u.ads || 0) - (before.ads || 0), races: (u.races || 0) - (before.races || 0) } : null;
+      events.unshift({ u, d, at: Number(u.lastAt) || nowSec(), fresh: true });
     }
-    const liveCount = await liveWait, { today, all, month, users } = held;
-    if (!live()) return;
-    if (full) {
-      const keys = Array.from({ length: 31 }, (_, i) => dayKey(30 - i));   // a whole month, whatever the date
-      const got = await Promise.all(keys.map(k => k === dayKey() ? today : dayTotals(k, k >= dayKey(1)).catch(() => ({ ...EMPTY_DAY }))));
-      days = keys.map((key, i) => ({ key, t: got[i] }));
-    } else if (days.length) days[days.length - 1].t = today;
-    if (!live()) return;
-    const tile = (n, label, c, sub) => h('div.stat.flat', { style: `--c:${c}` }, h('b', {}, n), h('span', {}, label), sub ? h('small', {}, sub) : null);
-    tiles.replaceChildren(tile(num(liveCount), 'Live now', 'var(--green)', 'last 100 seconds'), tile(num(today.players), 'Played today', 'var(--blue)'), tile(num(month), 'Played this month', 'var(--pink)'), tile(num(today.fresh), 'New today', '#5ce0d8'),
-      tile(num(users), 'Total players', 'var(--gold)'), tile(hours(today.players ? today.seconds / today.players : 0), 'Avg time today', 'var(--gold)', 'per player'), tile(num(today.races), 'Races today', 'var(--blue)'), tile(num(adsOf(today)), 'Ads today', 'var(--green)', today.players ? `${(adsOf(today) / today.players).toFixed(1)} per player` : ''));
-    const yesterday = days.length > 1 ? days[days.length - 2].t : EMPTY_DAY, week = addUp(days.slice(-7).map(d => d.t)), thisMonth = addUp(days.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).map(d => d.t));
-    const cols = [today, yesterday, week, thisMonth, all];
-    adsBox.replaceChildren(h('h2', {}, 'Ads seen'), h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Type'), ['Today', 'Yesterday', '7 days', 'Month', 'All time'].map(x => h('th.n', {}, x)))),
-      h('tbody', {}, [['Rewarded', 'rewarded'], ['Interstitial', 'interstitial'], ['Banner', 'banner'], ['Native Advanced', 'native']].map(([l, k]) => h('tr', {}, h('td', {}, l), cols.map(c => h('td.n.mono', {}, num(c[k] || 0))))), h('tr.total', {}, h('td', {}, 'Total'), cols.map(c => h('td.n.mono', {}, num(adsOf(c)))))))),
-      h('p.faint', {}, 'Game me ad dikhne par count hota hai. Earnings ke liye AdMob hi sahi number hai.'));
-    drawTrend();
-    stamp.textContent = `Updated ${new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+    events.sort((a, b) => b.at - a.at); events.splice(40);
+    if (feedReady) totalsChanged();
+    feedReady = true; drawFeed();
+  });
+  function drawFeed() {
+    const what = e => {
+      if (!e.d) return `${hours(e.u.seconds)} played · ${num(e.u.ads || 0)} ads · ${num(e.u.races || 0)} races`;
+      const bits = [e.d.seconds > 0 ? `+${hours(e.d.seconds)} played` : null, e.d.races > 0 ? `+${e.d.races} race${e.d.races > 1 ? 's' : ''}` : null, e.d.ads > 0 ? `+${e.d.ads} ad${e.d.ads > 1 ? 's' : ''}` : null].filter(Boolean);
+      return bits.length ? bits.join(' · ') : 'came back';
+    };
+    feed.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Live activity'), h('span.faint', {}, 'game ke reports, aate hi')),
+      events.length ? h('div.list.livelist', {}, events.slice(0, 25).map(e => h('button.item.linkrow', { class: e.fresh ? 'flash' : '', onclick: () => go('players', { id: e.u.id }) }, avatar(e.u.name),
+        h('div.grow', {}, h('div.name', {}, e.u.name || 'Player', ' ', h('span.faint', {}, `${flag(e.u.country)} Lv ${e.u.level || '-'}`)), h('div.faint', {}, what(e))), h('span.faint.mono', {}, seenText(e.at))))) : empty('Abhi data nahi aaya.'));
+    events.forEach(e => { e.fresh = false; });
   }
-  async function drawHealth() {
-    const rate = async back => {
-      const start = dayKey(back), base = await dayTotals(start, back <= 1).catch(() => null);
+
+  // ---------------------------------------------------------------- top players, live
+  let sortBy = 'seconds', period = 'all', topN = 25, search = '', topRows = [], stopTop = null, rankWas = new Map(), valuesWas = new Map();
+  const presence = new Map();   // the heartbeat of each player in the table: last seen to the second, online or not, racing where
+  let presenceIds = '', presenceStops = [];
+  const COLS = [['seconds', 'Hours', u => hours(u.seconds)], ['ads', 'Ads', u => num(u.ads || 0)], ['races', 'Races', u => num(u.races || 0)], ['sessions', 'Sessions', u => num(u.sessions || 0)], ['level', 'Level', u => u.level || '-']];
+  const searchBox = h('input', { placeholder: 'Naam ya ID se dhoondo', 'aria-label': 'Search top players', oninput: e => { search = e.target.value.trim().toLowerCase(); drawTop(); } });
+  function watchTop() {
+    if (stopTop) stopTop();
+    if (period === 'today' && sortBy === 'level') sortBy = 'seconds';
+    const path = period === 'today' ? `stats_days/${dayKey()}/players` : 'stats_players';
+    topRows = null; drawTop();
+    stopTop = listen(fb.query(col(path), fb.orderBy(sortBy, 'desc'), fb.limit(topN)), snap => {
+      topRows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      watchPresenceOf(topRows.map(r => r.id));
+      drawTop(true);
+    });
+  }
+  function watchPresenceOf(ids) {
+    const key = [...ids].sort().join(',');
+    if (key === presenceIds) return;
+    presenceIds = key; presenceStops.forEach(s => s()); presenceStops = [];
+    for (const part of chunks(ids, 30)) presenceStops.push(listen(fb.query(col('users'), fb.where(fb.documentId(), 'in', part)), snap => { snap.docs.forEach(d => presence.set(d.id, { id: d.id, ...d.data() })); drawTop(); }));
+  }
+  onLeave(() => presenceStops.forEach(s => s()));
+  function drawTop(fresh) {
+    const head2 = h('div.row.between', {}, h('div.row', {}, h('h2', {}, 'Top players'), h('span.livepill.small', {}, h('i'), 'LIVE')),
+      h('div.row', {}, h('div.tabs', { style: 'margin:0' }, [['all', 'All time'], ['today', 'Today']].map(([k, l]) => h('button.tab', { class: period === k ? 'on' : '', onclick: () => { period = k; watchTop(); } }, l))),
+        h('div.tabs', { style: 'margin:0' }, TOP_SIZES.map(n => h('button.tab', { class: topN === n ? 'on' : '', onclick: () => { topN = n; watchTop(); } }, `Top ${n}`)))));
+    const tabs = h('div.row.between', {}, h('div.tabs', { style: 'margin:0' }, COLS.filter(([k]) => !(period === 'today' && k === 'level')).map(([k, l]) => h('button.tab', { class: sortBy === k ? 'on' : '', onclick: () => { sortBy = k; watchTop(); } }, `Most ${l.toLowerCase()}`))),
+      h('div.row', {}, h('div', { style: 'width:min(240px,100%)' }, searchBox), h('button.btn.small', { disabled: !topRows || !topRows.length, onclick: () => csv([['Rank', 'Player', 'ID', 'Country', 'Hours', 'Ads', 'Races', 'Sessions', 'Level', 'Last seen', 'Online'], ...(topRows || []).map((u, i) => { const p = presence.get(u.id) || {}; return [i + 1, u.name || p.name || 'Player', u.id, countryName(u.country), ((u.seconds || 0) / 3600).toFixed(2), u.ads || 0, u.races || 0, u.sessions || 0, u.level || p.level || '', whenText(Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0)), isLive(p) ? 'yes' : 'no']; })]) }, 'Export CSV')));
+    if (!topRows) { top.replaceChildren(head2, tabs, loading()); return; }
+    const shown = topRows.map((u, i) => ({ u, rank: i + 1 })).filter(({ u }) => { const p = presence.get(u.id); return !search || `${u.name || p?.name || ''} ${u.id}`.toLowerCase().includes(search.replace(/\s/g, '')) || String(u.name || p?.name || '').toLowerCase().includes(search); });
+    const onlineCount = topRows.filter(u => isLive(presence.get(u.id))).length;
+    const body = shown.map(({ u, rank }) => {
+      const p = presence.get(u.id) || {}, on = isLive(p), seen = Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0);
+      const prevRank = rankWas.get(u.id), move = fresh && prevRank && prevRank !== rank ? (prevRank > rank ? h('span.up', { title: `was #${prevRank}` }, '▲') : h('span.down', { title: `was #${prevRank}` }, '▼')) : null;
+      const prev = valuesWas.get(u.id), changed = k => fresh && prev && prev[k] !== u[k];
+      return h('tr.link', { tabindex: 0, onclick: () => go('players', { id: u.id }), onkeydown: e => { if (e.key === 'Enter') go('players', { id: u.id }); } },
+        h('td.mono', {}, rank, ' ', move), h('td', {}, h('div.row', { style: 'gap:8px;flex-wrap:nowrap' }, h('span.dot', { class: on ? 'on' : '', title: on ? 'online' : 'offline' }), h('div', {}, h('div.name', {}, u.name || p.name || 'Player'), h('div.faint.mono', {}, showId(u.id))))),
+        h('td', {}, `${flag(u.country)} ${countryName(u.country)}`),
+        COLS.map(([k, , show]) => h('td.n.mono', { class: changed(k) ? 'flash' : '' }, k === 'level' ? (u.level || p.level || '-') : show(u))),
+        h('td', {}, on ? h('span.tag.g', {}, p.state === 'race' ? `LIVE · racing ${p.river || ''}`.trim() : 'LIVE · home') : h('span.faint', {}, seenText(seen))));
+    });
+    if (fresh) { rankWas = new Map(topRows.map((u, i) => [u.id, i + 1])); valuesWas = new Map(topRows.map(u => [u.id, { ...u }])); }
+    top.replaceChildren(head2, tabs, h('p.faint', {}, `${num(onlineCount)} of these ${num(topRows.length)} players are online now · ${period === 'today' ? 'aaj ka data' : 'all time'} · har change turant`),
+      topRows.length ? h('div.scroll.tall', {}, h('table', {}, h('thead', {}, h('tr', {}, ['#', 'Player', 'Country'].map(x => h('th', {}, x)), COLS.map(([k, l]) => h('th.n', { class: sortBy === k ? 'sorted' : '' }, l)), h('th', {}, 'Last seen'))),
+        h('tbody', {}, body.length ? body : h('tr', {}, h('td', { colspan: 9 }, empty('Is naam se koi nahi.')))))) : empty('Abhi data nahi aaya.'));
+  }
+
+  // ---------------------------------------------------------------- countries and game versions, live
+  let geoTab = 'today', geoRows = [], stopGeo = null, versions = [];
+  function watchGeo() {
+    if (stopGeo) stopGeo();
+    const path = { today: `stats_days/${dayKey()}/dims`, month: `stats_months/${dayKey().slice(0, 6)}/dims`, all: 'stats_all' }[geoTab];
+    stopGeo = listen(fb.query(col(path), fb.limit(300)), snap => {
+      geoRows = snap.docs.filter(d => d.id.startsWith('c_')).map(d => ({ c: d.id.slice(2), n: d.data().n || 0 })).sort((a, b) => b.n - a.n);
+      drawGeo();
+    });
+  }
+  function drawGeo() {
+    const sum = geoRows.reduce((s, r) => s + r.n, 0), big = geoRows[0]?.n || 1;
+    geo.replaceChildren(h('div.row.between', {}, h('h2', {}, 'Countries'), h('span.faint', {}, `${num(geoRows.length)} countries`)),
+      h('div.tabs', { style: 'margin:0' }, [['today', 'Today'], ['month', 'This month'], ['all', 'All time']].map(([k, l]) => h('button.tab', { class: geoTab === k ? 'on' : '', onclick: () => { geoTab = k; watchGeo(); } }, l))),
+      geoRows.length ? h('div.meters', {}, geoRows.slice(0, 20).map(r => h('div.meter', {}, h('span.mflag', { 'aria-hidden': 'true' }, flag(r.c)), h('span.mname', {}, countryName(r.c)), h('span.track', {}, h('i', { style: `width:${Math.max(r.n / big * 100, 2)}%` })), h('b.mono', {}, num(r.n)), h('span.faint.mono.pct', {}, `${Math.round(r.n / sum * 100)}%`)))) : empty('Abhi data nahi aaya.'));
+  }
+  listen(fb.query(col(`stats_days/${dayKey()}/dims`), fb.limit(300)), snap => {
+    versions = snap.docs.filter(d => d.id.startsWith('v_')).map(d => ({ v: d.id.slice(2), n: d.data().n || 0 })).sort((a, b) => b.n - a.n);
+    drawHealth();
+  });
+
+  // ---------------------------------------------------------------- players coming back (changes slowly: every 5 minutes)
+  let back = { d1: null, d7: null };
+  async function readHealth() {
+    const rate = async ago => {
+      const start = dayKey(ago), base = await dayTotals(start, ago <= 1).catch(() => null);
       if (!base || !base.fresh) return null;
       const n = await count(fb.query(col(`stats_days/${dayKey(0)}/players`), fb.where('firstDay', '==', Number(start))));
       return n === null ? null : Math.round(n / base.fresh * 100);
     };
-    const [d1, d7, versions] = await Promise.all([rate(1), rate(7), docs(fb.query(col(`stats_days/${dayKey()}/dims`), fb.limit(260))).catch(() => [])]);
+    const [d1, d7] = await Promise.all([rate(1), rate(7)]);
     if (!live()) return;
-    const vs = versions.filter(x => x.id.startsWith('v_')).map(x => ({ v: x.id.slice(2), n: x.n || 0 })).sort((a, b) => b.n - a.n);
-    health.replaceChildren(h('h2', {}, 'Players coming back'), h('div.fields', { style: 'grid-template-columns:1fr 1fr' },
-      h('div.mini-stat', {}, h('b', {}, d1 === null ? '-' : `${d1}%`), h('span', {}, 'Day 1'), h('small', {}, 'kal ke naye players aaj wapas aaye')), h('div.mini-stat', {}, h('b', {}, d7 === null ? '-' : `${d7}%`), h('span', {}, 'Day 7'), h('small', {}, '7 din pehle ke naye players aaj aaye'))),
-      h('div.lab', {}, 'Game versions today'), vs.length ? h('div.chips', {}, vs.slice(0, 6).map(x => h('span.tag.p', {}, `v${x.v}: ${num(x.n)}`))) : h('p.faint', {}, 'Abhi data nahi aaya.'));
+    back = { d1, d7 }; drawHealth();
   }
-  await refresh(true);
-  await Promise.all([drawGeo(), drawTop(), drawNow(), drawHealth()]);
-  let tick = 0, busy = false;
-  const timer = setInterval(async () => {
-    if (document.hidden || busy || !live()) return;
-    busy = true; tick++;
-    try { await refresh(false, tick % 3 === 0); if (tick % 3 === 0) await drawNow(); if (tick % 15 === 0) await Promise.all([drawGeo(), drawTop(), drawHealth()]); } catch (e) { console.warn(e); stamp.textContent = 'Connection lost, retrying...'; }
-    busy = false;
-  }, 20000);
-  onLeave(() => clearInterval(timer));
+  function drawHealth() {
+    health.replaceChildren(h('h2', {}, 'Players coming back'), h('div.fields', { style: 'grid-template-columns:1fr 1fr' },
+      h('div.mini-stat', {}, h('b', {}, back.d1 === null ? '-' : `${back.d1}%`), h('span', {}, 'Day 1'), h('small', {}, 'kal ke naye players aaj wapas aaye')), h('div.mini-stat', {}, h('b', {}, back.d7 === null ? '-' : `${back.d7}%`), h('span', {}, 'Day 7'), h('small', {}, '7 din pehle ke naye players aaj aaye'))),
+      h('div.lab', {}, 'Game versions today (live)'), versions.length ? h('div.chips', {}, versions.slice(0, 8).map(x => h('span.tag.p', {}, `v${x.v}: ${num(x.n)}`))) : h('p.faint', {}, 'Abhi data nahi aaya.'));
+  }
+
+  // ---------------------------------------------------------------- start everything
+  watchPresence(); watchTop(); watchGeo(); drawHealth(); drawTrend();
+  const keys = Array.from({ length: 31 }, (_, i) => dayKey(30 - i));   // a whole month, whatever the date; finished days come from this browser's cache
+  await readTotals();
+  if (!live()) return;
+  const past = await Promise.all(keys.map(k => k === dayKey() ? held.today : dayTotals(k, k >= dayKey(1)).catch(() => ({ ...EMPTY_DAY }))));
+  if (!live()) return;
+  days = keys.map((key, i) => ({ key, t: past[i] }));
+  drawTotals(); readHealth();
+
+  every(5000, () => {   // the clock: who has dropped off, "x seconds ago", and a new day at midnight (India time)
+    if (dayKey() !== startDay) { route(); return; }
+    drawLive(); drawTop();
+    const ago = Math.round((Date.now() - lastPush) / 1000);
+    stamp.textContent = ago < 5 ? 'Updated just now' : `Last change ${seenText(nowSec() - ago)}`;
+    if (!navigator.onLine) setHealthy(false);
+  });
+  every(120000, watchPresence);                                 // slide the live window forward
+  every(60000, () => { if (Date.now() - lastTotals > 55000) readTotals(); });   // quiet times still refresh once a minute
+  every(300000, readHealth);
 }
 
 // ------------------------------------------------------------------ help and support
