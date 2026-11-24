@@ -1100,7 +1100,7 @@ async function liveBoard(v, live, onLeave) {
   // What the graphs have seen is kept in this browser, so a refresh or another page and back carries on where it was.
   // The game's per-minute history (stats_minutes) fills in the time this board was closed, on any device.
   const KEEP_MS = 2 * 3600000, MEM = 'hippoAdmin.board.v1';
-  let series = [], windowMin = 30;
+  let series = [], windowMin = 30, savedPlayed = 0;
   const minutes = new Map(), server = new Map();   // minute start (ms) -> {races, ads} seen here / {players, races, ads} from the game
   try {
     const m = JSON.parse(localStorage.getItem(MEM) || 'null');
@@ -1108,9 +1108,10 @@ async function liveBoard(v, live, onLeave) {
       series = (m.series || []).map(([t, a, b]) => ({ t, a, b })).filter(p => p.t > Date.now() - KEEP_MS);
       (m.minutes || []).forEach(([t, r, a]) => { if (t > Date.now() - KEEP_MS) minutes.set(t, { races: r, ads: a }); });
       windowMin = m.window || 30;
+      if (m.played && Date.now() - m.played.at < 30 * 60000) savedPlayed = m.played.s;   // the 'played today' counter carries on, never back
     }
   } catch { /* start fresh */ }
-  const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]) })); } catch { /* full or blocked */ } };
+  const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]), played: { s: shownSeconds, at: Date.now() } })); } catch { /* full or blocked */ } };
   function sample() { if (!presenceReady) return; const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - KEEP_MS) series.shift(); remember(); }
   // India-time minute keys, as the game writes them: 202611242131
   const minuteKey = ms => { const d = new Date(ms + IST); return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`; };
@@ -1150,7 +1151,7 @@ async function liveBoard(v, live, onLeave) {
   const C = {};
   const counter = (key, label, color, sub) => { const b = h('b.cnum.mono', { 'data-v': 0 }, '0'), s = h('small', {}, sub || ''), bar = h('i'); C[key] = { b, s, bar }; return h('div.counter', { style: `--c:${color}` }, h('span.clabel', {}, label), b, h('div.vs', {}, h('span.vstrack', {}, bar), s)); };
   counters.replaceChildren(counter('hours', 'Aaj kitna khela (sab players)', 'var(--pink)'), counter('players', 'Aaj kitne players aaye', 'var(--blue)'), counter('races', 'Aaj kitni races', '#5ce0d8'), counter('ads', 'Aaj kitne ads dekhe', 'var(--gold)'), counter('fresh', 'Aaj naye players', 'var(--green)'));
-  let today = { ...EMPTY_DAY }, yesterday = null, totalsAt = Date.now(), shownSeconds = 0, busy = false, again = false, lastRead = 0, soon = null;
+  let today = { ...EMPTY_DAY }, yesterday = null, totalsAt = Date.now(), shownSeconds = savedPlayed, busy = false, again = false, lastRead = 0, soon = null;
   async function readTotals() {
     if (busy) { again = true; return; }
     busy = true; lastRead = Date.now();
@@ -1176,8 +1177,19 @@ async function liveBoard(v, live, onLeave) {
     rollTo(C.ads.b, adsOf(today), x => num(Math.round(x))); vsYesterday('ads', adsOf(today));
     rollTo(C.fresh.b, today.fresh, x => num(Math.round(x))); vsYesterday('fresh', today.fresh);
   }
-  function tickHours() {   // reported seconds, plus one second a second for each player online since the last count; never backwards
-    const est = today.seconds + liveList().length * (Date.now() - totalsAt) / 1000;
+  // Reported seconds, plus what each online player has played since their own last report (at most one report's worth:
+  // the game sends every minute, an older game every three). Shown never goes backwards, a refresh included.
+  const UNREPORTED_MOST = 180;
+  function unreported() {
+    let sum = 0;
+    for (const u of liveList()) {
+      const r = was.get(u.id), since = r && Number(r.lastAt) ? nowSec() - Number(r.lastAt) : (Date.now() - totalsAt) / 1000;
+      sum += Math.min(Math.max(since, 0), UNREPORTED_MOST);
+    }
+    return sum;
+  }
+  function tickHours() {
+    const est = today.seconds + unreported();
     shownSeconds = Math.max(shownSeconds, est);
     C.hours.b.textContent = clockText(shownSeconds); vsYesterday('hours', shownSeconds);
   }
