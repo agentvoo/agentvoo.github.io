@@ -1,45 +1,49 @@
-ADMIN PANEL UPDATE: LIVE BOARD JO REFRESH KE BAAD BHI YAAD RAKHE
-===============================================================
-Is baar 3 kaam hain, ISI ORDER me.
+ADMIN PANEL UPDATE v5: TOTAL HOURS AUR TOP PLAYERS AB SACH ME REALTIME
+=====================================================================
 
-1) NAYE RULES DEPLOY KARO (ye 24 Nov ko ho chuka hai)
-   cd ~/Downloads/RaftParty_Game/RaftGame_Assets/RaftParty_UnityProject/Firebase
-   firebase deploy --only firestore:rules --project fart2-d0d9f
-   (Naya: stats_minutes. Game har minute ka chhota record yahan likhta hai. Sirf admin padh sakta hai,
-    aur game sirf thoda thoda badha sakta hai, koi nakli bada number nahi daal sakta.)
+KYA UPLOAD KARNA HAI (sirf 2 files)
+  GitHub repo agentvoo.github.io > HippoAdminPanel > website
+     style.css
+     js/app.js
+  1-2 minute baad panel kholo aur Cmd+Shift+R dabao.
+  Rules me kuch nahi badla. Kuch deploy nahi karna.
 
-2) GITHUB PE 2 FILES BADLO
-   Repo agentvoo.github.io > HippoAdminPanel > website
-      style.css
-      js/app.js
-   1-2 minute baad panel kholo aur Cmd+Shift+R dabao.
+KYA THEEK HUA
+  1) "Sab players ne milke kitna khela" (Live Board)
+     - Pehle: number beech-beech me RUK jata tha, phir ek dum jump karta tha,
+       aur kabhi asli se 5-10 minute AAGE chala jata tha (galat).
+     - Ab: har player ka time uski apni aakhri game report se gina jata hai.
+       Jitne log khel rahe hain, total har second utna badhta hai.
+       Report aate hi number server ke asli number pe aa jata hai, bina ruke.
+     - Kabhi asli se zyada nahi dikhata, kabhi peeche nahi jata.
+     - Card me ab likha aata hai: "X players abhi khel rahe hain, total har second +X sec".
+       Koi nahi khel raha to: "Abhi koi nahi khel raha, isliye total ruka hai."
+       (Koi nahi khel raha to total badhna hi nahi chahiye. Yahi asli data hai.)
+     - Refresh karo ya dusre page pe jao aur wapas aao: wahin se chalta hai.
+  2) Analytics > Top players
+     - Jo player online hai, uske Hours har second badhte hain (seconds tak dikhte hain).
+     - "Today" tab me bhi ab hours live badhte hain (pehle nahi badhte the).
+     - Ads aur Races game ki report aate hi badhte hain (aur flash hote hain).
+     - Search box me type karte waqt ab typing nahi kat-ti, aur list ka scroll
+       apni jagah rehta hai (pehle har second table dobara banti thi).
+  3) Analytics me 2 naye tiles: "Hours today (sab players)" aur
+     "Hours all time (sab players)", dono har second live.
 
-3) NAYA GAME UPDATE DAALO
-   Game har minute ka record (kitne players khele, races, ads, time) Firebase me likhega.
-   Rules deploy kiye bina game update daala to bhi game ka baaki data safe rahega,
-   bas minute wala record nahi banega.
-
-NAYA (is update me): "SAB PLAYERS NE MILKE KITNA KHELA" (Live Board pe, sabse upar ke neeche)
-  - Shuru se ab tak sab players ka total time jod ke (1 ghanta + 2 ghante = 3 ghante),
-    har second badhta hai, refresh pe peeche nahi jata.
-  - Aaj / Is mahine / Pichhle 7 ya 30 din ka total, aur "Sabse zyada kis din" (date ke saath).
-  - Har din ka bar: gold = sabse zyada khela, green = aaj (live).
-  - Date wise list: har date ka total time, players, ek player ka avg, races.
-    "Nayi date pehle" ya "Sabse zyada pehle" se sort karo.
-  Upload: website/style.css aur website/js/app.js (rules pehle hi deploy ho chuke hain).
-
-LIVE BOARD ME AB KYA HOTA HAI
-  - Refresh karo ya dusre page se wapas aao: graph wahin se chalu rehta hai, shuru se nahi.
-    (Is browser me 2 ghante tak yaad rehta hai.)
-  - Board band tha tab ka data bhi dikhta hai (purple rang), game ke minute record se.
-    Kisi bhi phone ya laptop se kholo, wahi graph milega.
-  - "30 min" / "2 ghante" button: kitna peeche tak dekhna hai.
-  - "Har minute kya hua": races aur ads har minute ke, game ke record se (sab players ka).
-  - "Aaj kitna khela", players, races, ads: ye pehle se Firebase se aate hain, refresh pe
-    reset nahi hote. Kitna khela har second badhta hai (online players ka anumaan),
-    game ki report aate hi sahi ho jata hai.
+TEST KAISE HUA
+  Firebase emulator pe ek nakli game chalaya jo bilkul asli game ki tarah
+  report bhejta hai (har 40 s heartbeat, har 60 s stats, purane version wale
+  phone har 3 min), players aate-jaate rahe (7 se 18 online). Panel ka number
+  har second asli khele gaye time se milaya:
+    - Live Board total: asli se -8 se +5 second ke andar, kabhi ruka nahi,
+      kabhi peeche nahi gaya. (Purana code: 9.5 min aage, aur 30 baar ruka.)
+    - Top players: har player asli se -3 se +1 second ke andar (All time aur Today).
+    - Refresh ke baad bhi wahin se chala.
 
 DHYAN RAKHNA
-  - Purple history sirf naye game version wale players ki hai. Purane version wale
-    players live graph (green/blue) me dikhte hain, minute history me nahi.
-  - Har report ke saath game 1 extra write karta hai (minute record).
+  - Panel PEHLI BAAR kholne par jo log pehle se khel rahe the, unka "aakhri report
+    ke baad wala" time pakka pata nahi hota. Isliye number thoda kam se shuru hota hai,
+    aur unki agli report (naya game: 1 minute, purana game: 3 minute) aate hi poora ho jata hai.
+  - Ads aur races game ki report se hi aate hain: naya game ad ke ~10 second baad
+    bhejta hai, purana version thoda der se.
+  - Ye sab naye game version ke saath aur bhi tez hoga (har 60 s report).
+    Naya game Play Store pe daalna abhi baaki hai.

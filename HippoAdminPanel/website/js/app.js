@@ -719,6 +719,80 @@ function csv(rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
+// ------------------------------------------------------------------ time played, to the second
+// The game adds each player's seconds to the server every minute (an older game every three) and beats its heartbeat every
+// 40 s. A player who is online has also played the time since their own last report. The server's sum plus that, player
+// by player, moves every second and lands on the server's number as each report comes in: nothing counted twice, nothing
+// lost, and when a player stops, their part stops with them.
+const UNREPORTED_MOST = 200;   // one report's worth and a little: past this a player's time waits for their next report
+const PLAY_MEM = 'hippoAdmin.play.v1';   // who is playing since when: shared by the pages, so a refresh or a page change carries on
+function playClock(listen, liveNow, userOf, onLeave) {
+  const reports = new Map();   // id -> the game's time of their last report, for everyone who reported in the last 15 min
+  const covered = new Map();   // the same, as of the last time the server added up: the time before it is in the sums
+  const sighted = new Map();   // id -> when they were seen to start playing (their time before it is not counted)
+  const playing = new Map();   // id -> 0 while playing, else when they stopped (kept until their last report is in the sums)
+  let stop = null, gotReports = false, gotPresence = false, wake = null, ticks = 0;
+  const ready = new Promise(r => { wake = r; });
+  const check = () => { if (gotReports && gotPresence) wake(); };
+  function watch() {
+    if (stop) stop();
+    stop = listen(fb.query(col('stats_players'), fb.where('lastAt', '>=', nowSec() - 900), fb.orderBy('lastAt', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
+      reports.clear(); snap.docs.forEach(d => reports.set(d.id, Number(d.data().lastAt) || 0));
+      gotReports = true; check();
+    });
+  }
+  // A player's time counts from their last report, but never from before they were seen playing: a player back after a
+  // break has not reported this session yet. One already playing when the panel opened counts from that moment, and their
+  // next report (within a minute) brings what came before. So it never shows more than was really played.
+  const start = (id, at) => Math.max(at, sighted.get(id) || 0);
+  /** Seconds this player has played that the server does not have yet, counted from `at`, their report the caller holds. */
+  function extra(id, at) {
+    const left = playing.get(id);
+    if (left === undefined) return 0;
+    return Math.min(Math.max((left || nowSec()) - start(id, Number(at) || 0), 0), UNREPORTED_MOST);
+  }
+  /** Once a second: who is playing now, and all they have played that the last server sum does not have. */
+  function tick() {
+    const now = nowSec(), here = new Set();
+    for (const u of liveNow()) {
+      here.add(u.id);
+      if (playing.get(u.id) === 0) continue;
+      sighted.set(u.id, now); playing.set(u.id, 0);
+    }
+    for (const [id, left] of playing) {
+      if (!left) {
+        if (here.has(id) || !gotPresence) continue;
+        const u = userOf(id), seen = Number(u && u.seen) || now;
+        playing.set(id, Math.min(now, u && u.state === 'off' ? seen : seen + 40));   // the heartbeat stopped: they played until about then
+      } else if ((covered.get(id) || 0) >= left - 5 || now - left > 600) { playing.delete(id); sighted.delete(id); }
+    }
+    let sum = 0;
+    for (const id of playing.keys()) sum += extra(id, covered.get(id) || 0);
+    if (++ticks % 3 === 0) save();
+    return sum;
+  }
+  function save() { try { localStorage.setItem(PLAY_MEM, JSON.stringify({ at: nowSec(), p: [...playing].map(([id, left]) => [id, left, start(id, covered.get(id) || 0)]) })); } catch { /* full or blocked */ } }
+  try {   // carry on from the last page, if it was only a moment ago
+    const o = JSON.parse(localStorage.getItem(PLAY_MEM) || 'null');
+    if (o && Array.isArray(o.p) && nowSec() - o.at < 180) for (const [id, left, from] of o.p) { playing.set(id, left || 0); sighted.set(id, from); }
+  } catch { /* start fresh */ }
+  addEventListener('pagehide', save); onLeave(() => { save(); removeEventListener('pagehide', save); });
+  return {
+    watch, tick, extra, ready,
+    /** Call as the server's sums come in: from now on everything before each player's last report is in them. */
+    synced() { covered.clear(); reports.forEach((at, id) => covered.set(id, at)); },
+    presenceIn() { if (!gotPresence) { gotPresence = true; check(); } },
+    reportAt: id => reports.get(id) || 0,
+    isPlaying: id => playing.get(id) === 0,
+    playingCount() { let n = 0; for (const left of playing.values()) if (!left) n++; return n; },
+  };
+}
+/** Runs `fn` once each new second. Checked four times a second: a browser that delays timers (energy saver, a busy tab)
+ *  can stretch a plain one-second timer to two, and the counters would visibly skip. */
+function eachSecond(every, fn) { let last = 0; every(250, () => { const s = nowSec(); if (s !== last) { last = s; fn(); } }); }
+/** Waits for a promise, but never longer than `ms`. */
+const atMost = (p, ms) => Promise.race([p, new Promise(r => setTimeout(r, ms))]);
+
 async function analytics(v, live, onLeave) {
   const startDay = dayKey();
   const stops = [], timers = [];
@@ -760,11 +834,12 @@ async function analytics(v, live, onLeave) {
     stopPresence = listen(fb.query(col('users'), fb.where('seen', '>=', since), fb.orderBy('seen', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
       online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() }));
       presenceCapped = snap.size >= PRESENCE_CAP;
-      drawLive(); drawTop();
+      play.presenceIn(); drawLive(); drawTopSoon();
     });
   }
   const isLive = u => u && u.state !== 'off' && nowSec() - Number(u.seen || 0) <= LIVE_SECONDS;
   const livePlayers = () => [...online.values()].filter(isLive).sort((a, b) => (b.state === 'race') - (a.state === 'race') || Number(b.seen) - Number(a.seen));
+  const play = playClock(listen, livePlayers, id => online.get(id) || presence.get(id), onLeave);
   function drawLive() {
     const list = livePlayers(), racing = list.filter(u => u.state === 'race').length;
     const shown = presenceCapped && serverLive !== null ? serverLive : list.length;
@@ -781,19 +856,23 @@ async function analytics(v, live, onLeave) {
   const tile = (label, c) => { const b = h('b', {}, '-'), small = h('small', {}, ''); return { b, small, el: h('div.stat.flat', { style: `--c:${c}` }, b, h('span', {}, label), small) }; };
   const liveTile = tile('Live now', 'var(--green)'), T = {
     today: tile('Played today', 'var(--blue)'), month: tile('Played this month', 'var(--pink)'), fresh: tile('New today', '#5ce0d8'), users: tile('Total players', 'var(--gold)'),
-    avg: tile('Avg time today', 'var(--gold)'), races: tile('Races today', 'var(--blue)'), ads: tile('Ads today', 'var(--green)'), hours: tile('Hours today', 'var(--pink)'),
+    avg: tile('Avg time today', 'var(--gold)'), races: tile('Races today', 'var(--blue)'), ads: tile('Ads today', 'var(--green)'), hours: tile('Hours today (sab players)', 'var(--pink)'),
+    allHours: tile('Hours all time (sab players)', 'var(--pink)'),
   };
+  T.hours.b.classList.add('mono', 'tick'); T.allHours.b.classList.add('mono', 'tick');
   tiles.replaceChildren(liveTile.el, ...Object.values(T).map(t => t.el));
-  let days = [], held = null, totalsBusy = false, totalsAgain = false, lastTotals = 0;
+  let days = [], held = null, totalsBusy = false, totalsAgain = false, lastTotals = 0, todayShown = 0, allShown = 0;
   const setTile = (t, text, sub) => { if (t.b.textContent !== text && t.b.textContent !== '-') { t.el.classList.remove('flash'); void t.el.offsetWidth; t.el.classList.add('flash'); } t.b.textContent = text; t.small.textContent = sub || ''; };
   async function readTotals() {
     if (totalsBusy) { totalsAgain = true; return; }
     totalsBusy = true; lastTotals = Date.now();
     try {
+      if (!held) await atMost(play.ready, 6000);   // the first sums wait for who is playing, so the hours start from the right place
       const [today, all, month, users] = await Promise.all([dayTotals(dayKey(), true), totals('stats_players'), count(col(`stats_months/${dayKey().slice(0, 6)}/players`)), count(col('users'))]);
       if (presenceCapped) serverLive = await count(fb.query(col('users'), fb.where('seen', '>=', String(nowSec() - LIVE_SECONDS))));
       if (!live()) return;
-      held = { today, all, month, users };
+      play.synced();
+      held = { today, all, month, users }; tickPlay();
       if (days.length) days[days.length - 1].t = today;
       drawTotals();
     } catch (e) { console.warn(e); } finally { totalsBusy = false; if (totalsAgain) { totalsAgain = false; setTimeout(readTotals, 3000); } }
@@ -810,7 +889,7 @@ async function analytics(v, live, onLeave) {
     const { today, all, month, users } = held;
     setTile(T.today, num(today.players)); setTile(T.month, num(month)); setTile(T.fresh, num(today.fresh)); setTile(T.users, num(users));
     setTile(T.avg, hours(today.players ? Math.round(today.seconds / today.players) : 0), 'per player'); setTile(T.races, num(today.races));
-    setTile(T.ads, num(adsOf(today)), today.players ? `${(adsOf(today) / today.players).toFixed(1)} per player` : ''); setTile(T.hours, (today.seconds / 3600).toFixed(1), 'all players together');
+    setTile(T.ads, num(adsOf(today)), today.players ? `${(adsOf(today) / today.players).toFixed(1)} per player` : '');
     const yesterday = days.length > 1 ? days[days.length - 2].t : EMPTY_DAY, week = addUp(days.slice(-7).map(d => d.t)), thisMonth = addUp(days.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).map(d => d.t));
     const cols = [today, yesterday, week, thisMonth, all];
     adsBox.replaceChildren(h('h2', {}, 'Ads seen'), h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Type'), ['Today', 'Yesterday', '7 days', 'Month', 'All time'].map(x => h('th.n', {}, x)))),
@@ -863,18 +942,26 @@ async function analytics(v, live, onLeave) {
   }
 
   // ---------------------------------------------------------------- top players, live
+  // The tabs and the search box are built once; only the rows change, so typing and scrolling are never interrupted.
+  // Hours tick every second for a player who is playing: their last report plus the time since it, never going back.
   let sortBy = 'seconds', period = 'all', topN = 25, search = '', topRows = [], stopTop = null, rankWas = new Map(), valuesWas = new Map();
   const presence = new Map();   // the heartbeat of each player in the table: last seen to the second, online or not, racing where
   let presenceIds = '', presenceStops = [];
   const COLS = [['seconds', 'Hours', u => hours(u.seconds)], ['ads', 'Ads', u => num(u.ads || 0)], ['races', 'Races', u => num(u.races || 0)], ['sessions', 'Sessions', u => num(u.sessions || 0)], ['level', 'Level', u => u.level || '-']];
-  const searchBox = h('input', { placeholder: 'Naam ya ID se dhoondo', 'aria-label': 'Search top players', oninput: e => { search = e.target.value.trim().toLowerCase(); drawTop(); } });
+  const searchBox = h('input', { type: 'search', placeholder: 'Naam ya ID se dhoondo', 'aria-label': 'Search top players', oninput: e => { search = e.target.value.trim().toLowerCase(); drawTop(); } });
+  const topInfo = h('p.faint', {}, ''), topScroll = h('div.scroll.tall');
+  const shownRow = new Map(), grewAt = new Map();   // what each row's hours have shown (never back) / when its seconds last grew
+  let hourCells = [];
+  const onNow = id => isLive(presence.get(id)) || isLive(online.get(id));
   function watchTop() {
     if (stopTop) stopTop();
     if (period === 'today' && sortBy === 'level') sortBy = 'seconds';
     const path = period === 'today' ? `stats_days/${dayKey()}/players` : 'stats_players';
-    topRows = null; drawTop();
+    topRows = null; grewAt.clear(); drawTopFrame();
     stopTop = listen(fb.query(col(path), fb.orderBy(sortBy, 'desc'), fb.limit(topN)), snap => {
+      const before = new Map((topRows || []).map(r => [r.id, r.seconds]));
       topRows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      for (const r of topRows) if (before.has(r.id) && before.get(r.id) !== r.seconds) grewAt.set(r.id, nowSec());
       watchPresenceOf(topRows.map(r => r.id));
       drawTop(true);
     });
@@ -883,32 +970,73 @@ async function analytics(v, live, onLeave) {
     const key = [...ids].sort().join(',');
     if (key === presenceIds) return;
     presenceIds = key; presenceStops.forEach(s => s()); presenceStops = [];
-    for (const part of chunks(ids, 30)) presenceStops.push(listen(fb.query(col('users'), fb.where(fb.documentId(), 'in', part)), snap => { snap.docs.forEach(d => presence.set(d.id, { id: d.id, ...d.data() })); drawTop(); }));
+    for (const part of chunks(ids, 30)) presenceStops.push(listen(fb.query(col('users'), fb.where(fb.documentId(), 'in', part)), snap => { snap.docs.forEach(d => presence.set(d.id, { id: d.id, ...d.data() })); drawTopSoon(); }));
   }
   onLeave(() => presenceStops.forEach(s => s()));
-  function drawTop(fresh) {
+  /** A row's hours now. A day's row has no report time of its own: the player's last report, or when this row last grew. */
+  function rowSeconds(u) {
+    const at = period === 'today' ? Math.max(play.reportAt(u.id), (grewAt.get(u.id) || 0) - 3) : Number(u.lastAt) || 0;
+    const key = `${period}.${u.id}`, v = Math.max(shownRow.get(key) || 0, (u.seconds || 0) + play.extra(u.id, at));
+    shownRow.set(key, v);
+    return v;
+  }
+  const rowHours = u => clockText(rowSeconds(u));   // to the second for everyone, so a player who stops never looks like they went back
+  function tickRows() { for (const c of hourCells) { const t = rowHours(c.u); if (c.td.textContent !== t) c.td.textContent = t; } }
+  function drawTopFrame() {
     const head2 = h('div.row.between', {}, h('div.row', {}, h('h2', {}, 'Top players'), h('span.livepill.small', {}, h('i'), 'LIVE')),
       h('div.row', {}, h('div.tabs', { style: 'margin:0' }, [['all', 'All time'], ['today', 'Today']].map(([k, l]) => h('button.tab', { class: period === k ? 'on' : '', onclick: () => { period = k; watchTop(); } }, l))),
         h('div.tabs', { style: 'margin:0' }, TOP_SIZES.map(n => h('button.tab', { class: topN === n ? 'on' : '', onclick: () => { topN = n; watchTop(); } }, `Top ${n}`)))));
     const tabs = h('div.row.between', {}, h('div.tabs', { style: 'margin:0' }, COLS.filter(([k]) => !(period === 'today' && k === 'level')).map(([k, l]) => h('button.tab', { class: sortBy === k ? 'on' : '', onclick: () => { sortBy = k; watchTop(); } }, `Most ${l.toLowerCase()}`))),
-      h('div.row', {}, h('div', { style: 'width:min(240px,100%)' }, searchBox), h('button.btn.small', { disabled: !topRows || !topRows.length, onclick: () => csv([['Rank', 'Player', 'ID', 'Country', 'Hours', 'Ads', 'Races', 'Sessions', 'Level', 'Last seen', 'Online'], ...(topRows || []).map((u, i) => { const p = presence.get(u.id) || {}; return [i + 1, u.name || p.name || 'Player', u.id, countryName(u.country), ((u.seconds || 0) / 3600).toFixed(2), u.ads || 0, u.races || 0, u.sessions || 0, u.level || p.level || '', whenText(Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0)), isLive(p) ? 'yes' : 'no']; })]) }, 'Export CSV')));
-    if (!topRows) { top.replaceChildren(head2, tabs, loading()); return; }
+      h('div.row', {}, h('div', { style: 'width:min(240px,100%)' }, searchBox), h('button.btn.small', { onclick: () => {
+        if (!topRows || !topRows.length) return toast('Abhi data nahi aaya.', true);
+        csv([['Rank', 'Player', 'ID', 'Country', 'Hours', 'Ads', 'Races', 'Sessions', 'Level', 'Last seen', 'Online'], ...topRows.map((u, i) => { const p = presence.get(u.id) || {}; return [i + 1, u.name || p.name || 'Player', u.id, countryName(u.country), (rowSeconds(u) / 3600).toFixed(2), u.ads || 0, u.races || 0, u.sessions || 0, u.level || p.level || '', whenText(Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0)), onNow(u.id) ? 'yes' : 'no']; })]);
+      } }, 'Export CSV')));
+    top.replaceChildren(head2, tabs, topInfo, topScroll);
+    drawTop();
+  }
+  let topSoon = null, topFresh = false;
+  function drawTopSoon(fresh) {   // heartbeats arrive all the time with many players: one redraw for each quarter second at most
+    topFresh = topFresh || !!fresh;
+    if (!topSoon) topSoon = setTimeout(() => { topSoon = null; const f = topFresh; topFresh = false; if (live()) drawTop(f); }, 250);
+  }
+  onLeave(() => clearTimeout(topSoon));
+  function drawTop(fresh) {
+    hourCells = [];
+    if (!topRows) { topInfo.textContent = ''; topScroll.replaceChildren(loading()); return; }
     const shown = topRows.map((u, i) => ({ u, rank: i + 1 })).filter(({ u }) => { const p = presence.get(u.id); return !search || `${u.name || p?.name || ''} ${u.id}`.toLowerCase().includes(search.replace(/\s/g, '')) || String(u.name || p?.name || '').toLowerCase().includes(search); });
-    const onlineCount = topRows.filter(u => isLive(presence.get(u.id))).length;
+    const onlineCount = topRows.filter(u => onNow(u.id)).length;
+    topInfo.textContent = `${num(onlineCount)} of these ${num(topRows.length)} players are online now · ${period === 'today' ? 'aaj ka data' : 'all time'} · online players ke hours har second badhte hain, ads aur races game ki report aate hi`;
+    if (!topRows.length) { topScroll.replaceChildren(empty('Abhi data nahi aaya.')); return; }
     const body = shown.map(({ u, rank }) => {
-      const p = presence.get(u.id) || {}, on = isLive(p), seen = Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0);
+      const p = presence.get(u.id) || online.get(u.id) || {}, on = onNow(u.id), seen = Math.max(Number(p.seen) || 0, Number(u.lastAt) || 0);
       const prevRank = rankWas.get(u.id), move = fresh && prevRank && prevRank !== rank ? (prevRank > rank ? h('span.up', { title: `was #${prevRank}` }, '▲') : h('span.down', { title: `was #${prevRank}` }, '▼')) : null;
       const prev = valuesWas.get(u.id), changed = k => fresh && prev && prev[k] !== u[k];
+      const cells = COLS.map(([k, , show]) => {
+        const td = h('td.n.mono', { class: changed(k) ? 'flash' : '' }, k === 'level' ? (u.level || p.level || '-') : k === 'seconds' ? rowHours(u) : show(u));
+        if (k === 'seconds') hourCells.push({ td, u });
+        return td;
+      });
       return h('tr.link', { tabindex: 0, onclick: () => go('players', { id: u.id }), onkeydown: e => { if (e.key === 'Enter') go('players', { id: u.id }); } },
         h('td.mono', {}, rank, ' ', move), h('td', {}, h('div.row', { style: 'gap:8px;flex-wrap:nowrap' }, h('span.dot', { class: on ? 'on' : '', title: on ? 'online' : 'offline' }), h('div', {}, h('div.name', {}, u.name || p.name || 'Player'), h('div.faint.mono', {}, showId(u.id))))),
-        h('td', {}, `${flag(u.country)} ${countryName(u.country)}`),
-        COLS.map(([k, , show]) => h('td.n.mono', { class: changed(k) ? 'flash' : '' }, k === 'level' ? (u.level || p.level || '-') : k === 'seconds' && on ? clockText((u.seconds || 0) + Math.min(Math.max(0, nowSec() - (Number(u.lastAt) || nowSec())), 120)) : show(u))),   // online: the time ticks on since their last report
+        h('td', {}, `${flag(u.country)} ${countryName(u.country)}`), cells,
         h('td', {}, on ? h('span.tag.g', {}, p.state === 'race' ? `LIVE · racing ${p.river || ''}`.trim() : 'LIVE · home') : h('span.faint', {}, seenText(seen))));
     });
     if (fresh) { rankWas = new Map(topRows.map((u, i) => [u.id, i + 1])); valuesWas = new Map(topRows.map(u => [u.id, { ...u }])); }
-    top.replaceChildren(head2, tabs, h('p.faint', {}, `${num(onlineCount)} of these ${num(topRows.length)} players are online now · ${period === 'today' ? 'aaj ka data' : 'all time'} · har change turant`),
-      topRows.length ? h('div.scroll.tall', {}, h('table', {}, h('thead', {}, h('tr', {}, ['#', 'Player', 'Country'].map(x => h('th', {}, x)), COLS.map(([k, l]) => h('th.n', { class: sortBy === k ? 'sorted' : '' }, l)), h('th', {}, 'Last seen'))),
-        h('tbody', {}, body.length ? body : h('tr', {}, h('td', { colspan: 9 }, empty('Is naam se koi nahi.')))))) : empty('Abhi data nahi aaya.'));
+    const st = topScroll.scrollTop, sl = topScroll.scrollLeft;
+    topScroll.replaceChildren(h('table', {}, h('thead', {}, h('tr', {}, ['#', 'Player', 'Country'].map(x => h('th', {}, x)), COLS.map(([k, l]) => h('th.n', { class: sortBy === k ? 'sorted' : '' }, l)), h('th', {}, 'Last seen'))),
+      h('tbody', {}, body.length ? body : h('tr', {}, h('td', { colspan: 9 }, empty('Is naam se koi nahi.'))))));
+    topScroll.scrollTop = st; topScroll.scrollLeft = sl;
+  }
+
+  /** Once a second: the hours of everyone playing, in the tiles and the table. */
+  function tickPlay() {
+    const extra = play.tick();
+    tickRows();
+    if (!held) return;
+    todayShown = Math.max(todayShown, held.today.seconds + extra); allShown = Math.max(allShown, held.all.seconds + extra);
+    T.hours.b.textContent = clockText(todayShown); T.allHours.b.textContent = clockText(allShown);
+    const n = play.playingCount(), sub = n ? `${num(n)} abhi khel rahe` : 'abhi koi nahi khel raha';
+    T.hours.small.textContent = sub; T.allHours.small.textContent = `${num(Math.floor(allShown / 3600))} ghante · shuru se ab tak`;
   }
 
   // ---------------------------------------------------------------- countries and game versions, live
@@ -952,7 +1080,7 @@ async function analytics(v, live, onLeave) {
   }
 
   // ---------------------------------------------------------------- start everything
-  watchPresence(); watchTop(); watchGeo(); drawHealth(); drawTrend();
+  watchPresence(); play.watch(); watchTop(); watchGeo(); drawHealth(); drawTrend();
   const keys = Array.from({ length: 31 }, (_, i) => dayKey(30 - i));   // a whole month, whatever the date; finished days come from this browser's cache
   await readTotals();
   if (!live()) return;
@@ -963,13 +1091,13 @@ async function analytics(v, live, onLeave) {
 
   every(5000, () => {   // the clock: who has dropped off, "x seconds ago", and a new day at midnight (India time)
     if (dayKey() !== startDay) { route(); return; }
-    drawLive(); drawTop();
+    drawLive(); drawTopSoon();
     const ago = Math.round((Date.now() - lastPush) / 1000);
     stamp.textContent = ago < 5 ? 'Updated just now' : `Last change ${seenText(nowSec() - ago)}`;
     if (!navigator.onLine) setHealthy(false);
   });
-  every(1000, () => { if (topRows && topRows.some(u => isLive(presence.get(u.id)))) drawTop(); });   // online players' hours tick each second
-  every(120000, watchPresence);                                 // slide the live window forward
+  eachSecond(every, tickPlay);                                   // the hours of everyone playing tick each second
+  every(120000, () => { watchPresence(); play.watch(); });     // slide the live windows forward
   every(60000, () => { if (Date.now() - lastTotals > 55000) readTotals(); });   // quiet times still refresh once a minute
   every(300000, readHealth);
 }
@@ -1093,11 +1221,12 @@ async function liveBoard(v, live, onLeave) {
     stopPresence = listen(fb.query(col('users'), fb.where('seen', '>=', String(nowSec() - 180)), fb.orderBy('seen', 'desc'), fb.limit(PRESENCE_CAP)), snap => {
       online.clear(); snap.docs.forEach(d => online.set(d.id, { id: d.id, ...d.data() }));
       if (!presenceReady) { presenceReady = true; sample(); }
-      drawPresence();
+      play.presenceIn(); drawPresence();
     });
   };
   let presenceReady = false;   // no sample until the first answer: an empty list before it is not 'nobody online'
   const liveList = () => [...online.values()].filter(u => u.state !== 'off' && nowSec() - Number(u.seen || 0) <= LIVE_SECONDS);
+  const play = playClock(listen, liveList, id => online.get(id), onLeave);
   // What the graphs have seen is kept in this browser, so a refresh or another page and back carries on where it was.
   // The game's per-minute history (stats_minutes) fills in the time this board was closed, on any device.
   const KEEP_MS = 2 * 3600000, MEM = 'hippoAdmin.board.v1';
@@ -1114,6 +1243,8 @@ async function liveBoard(v, live, onLeave) {
     }
   } catch { /* start fresh */ }
   const remember = () => { try { localStorage.setItem(MEM, JSON.stringify({ day: startDay, window: windowMin, series: series.map(p => [p.t, p.a, p.b]), minutes: [...minutes].map(([t, k]) => [t, k.races, k.ads]), played: { s: shownSeconds, at: Date.now() }, all: { s: allShown, at: Date.now() } })); } catch { /* full or blocked */ } };
+  const keep = () => remember();   // a refresh or a closed tab keeps the very last second too
+  addEventListener('pagehide', keep); onLeave(() => { remember(); removeEventListener('pagehide', keep); });
   function sample() { if (!presenceReady) return; const l = liveList(), racing = l.filter(u => u.state === 'race').length; series.push({ t: Date.now(), a: racing, b: l.length - racing }); while (series.length && series[0].t < Date.now() - KEEP_MS) series.shift(); remember(); }
   // India-time minute keys, as the game writes them: 202611242131
   const minuteKey = ms => { const d = new Date(ms + IST); return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`; };
@@ -1153,17 +1284,24 @@ async function liveBoard(v, live, onLeave) {
   const C = {};
   const counter = (key, label, color, sub) => { const b = h('b.cnum.mono', { 'data-v': 0 }, '0'), s = h('small', {}, sub || ''), bar = h('i'); C[key] = { b, s, bar }; return h('div.counter', { style: `--c:${color}` }, h('span.clabel', {}, label), b, h('div.vs', {}, h('span.vstrack', {}, bar), s)); };
   counters.replaceChildren(counter('hours', 'Aaj kitna khela (sab players)', 'var(--pink)'), counter('players', 'Aaj kitne players aaye', 'var(--blue)'), counter('races', 'Aaj kitni races', '#5ce0d8'), counter('ads', 'Aaj kitne ads dekhe', 'var(--gold)'), counter('fresh', 'Aaj naye players', 'var(--green)'));
-  let today = { ...EMPTY_DAY }, yesterday = null, totalsAt = Date.now(), shownSeconds = savedPlayed, busy = false, again = false, lastRead = 0, soon = null;
+  let today = { ...EMPTY_DAY }, yesterday = null, shownSeconds = savedPlayed, busy = false, again = false, lastRead = 0, soon = null, firstTotals = true;
   async function readTotals() {
     if (busy) { again = true; return; }
     busy = true; lastRead = Date.now();
     try {
-      const t = await dayTotals(dayKey(), true);
+      if (firstTotals) await atMost(play.ready, 6000);   // the first sums wait for who is playing, so the hours start from the right place
+      const [t, all] = await Promise.all([dayTotals(dayKey(), true), fb.getAggregateFromServer(col('stats_players'), { v: fb.sum('seconds') }).then(r => r.data().v || 0).catch(e => { console.warn(e); return null; })]);
       if (!live()) return;
-      const all = await fb.getAggregateFromServer(col('stats_players'), { v: fb.sum('seconds') }).then(r => r.data().v || 0).catch(() => null);
-      if (!live()) return;
-      if (all !== null) allSeconds = all;
-      today = t; totalsAt = Date.now(); drawTotals();
+      play.synced();
+      if (all !== null) { allSeconds = all; allError = false; } else if (allSeconds === null) allError = true;
+      today = t;
+      if (firstTotals) {   // what this browser remembered is kept only while it agrees with the server
+        firstTotals = false;
+        const extra = play.tick();
+        if (shownSeconds > t.seconds + extra + 60) shownSeconds = 0;
+        if (allSeconds !== null && allShown > allSeconds + extra + 60) allShown = 0;
+      }
+      tickHours(); drawTotals();
       if (playDays.length) { playDays[playDays.length - 1].t = t; drawPlayed(); }
       ads.body.replaceChildren(donut([{ label: 'Rewarded', value: t.rewarded, color: '#4fd65c' }, { label: 'Interstitial', value: t.interstitial, color: '#ffd23f' }, { label: 'Banner', value: t.banner, color: '#42a9ff' }, { label: 'Native', value: t.native, color: '#ff7ac6' }], num(adsOf(t)), 'ads aaj'));
     } catch (e) { console.warn(e); } finally { busy = false; if (again) { again = false; setTimeout(readTotals, 3000); } }
@@ -1183,21 +1321,27 @@ async function liveBoard(v, live, onLeave) {
     rollTo(C.ads.b, adsOf(today), x => num(Math.round(x))); vsYesterday('ads', adsOf(today));
     rollTo(C.fresh.b, today.fresh, x => num(Math.round(x))); vsYesterday('fresh', today.fresh);
   }
-  // Reported seconds, plus what each online player has played since their own last report (at most one report's worth:
-  // the game sends every minute, an older game every three). Shown never goes backwards, a refresh included.
-  const UNREPORTED_MOST = 180;
-  function unreported() {
-    let sum = 0;
-    for (const u of liveList()) {
-      const r = was.get(u.id), since = r && Number(r.lastAt) ? nowSec() - Number(r.lastAt) : (Date.now() - totalsAt) / 1000;
-      sum += Math.min(Math.max(since, 0), UNREPORTED_MOST);
-    }
-    return sum;
-  }
+
   // ---------------------------------------------------------------- all players together, and day by day
-  let allSeconds = 0, allShown = savedAll, playDays = [], playRange = 30, playSort = 'new', allNum = null, todayNum = null;
+  // Built once: the numbers tick in place, the bars redraw now and then, and the date list keeps its scroll and its open state.
+  let allSeconds = null, allError = false, allShown = savedAll, playDays = [], playRange = 30, playSort = 'new', todayCell = null;
   const dateText = key => new Date(Date.UTC(+key.slice(0, 4), +key.slice(4, 6) - 1, +key.slice(6))).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
   const hrs = sec => (sec / 3600).toFixed(sec < 36000 ? 1 : 0);
+  const allNum = h('b.allnum.mono', {}, '-'), allSub = h('small.faint', {}, 'Server se jod raha hai...'), liveLine = h('div.playlive', {}, '');
+  const nToday = h('b.mono', {}, '-'), nMonth = h('b.mono', {}, '-'), nRangeLbl = h('span', {}, 'Pichhle 30 din'), nRange = h('b.mono', {}, '-'), nBest = h('b', {}, '-'), nBestSub = h('small', {}, '');
+  const rangeTabs = h('div.tabs', { style: 'margin:0' }), sortTabs = h('div.tabs', { style: 'margin:0' }), chartBox = h('div', {}, loading()), listScroll = h('div.scroll.daylist');
+  played.body.replaceChildren(
+    h('div.playtop', {},
+      h('div.allbox', {}, h('span.clabel', {}, 'Shuru se ab tak, sab players ka total'), allNum, allSub, liveLine),
+      h('div.minis', {},
+        h('div.mini', {}, h('span', {}, 'Aaj'), nToday),
+        h('div.mini', {}, h('span', {}, 'Is mahine'), nMonth),
+        h('div.mini', {}, nRangeLbl, nRange),
+        h('div.mini.best', {}, h('span', {}, 'Sabse zyada kis din'), nBest, nBestSub))),
+    h('div.row.between', {}, h('h3', { style: 'margin:0' }, 'Din ke hisaab se'), rangeTabs),
+    chartBox,
+    legend([['#ffd23f', 'Sabse zyada khela'], ['#4fd65c', 'Aaj (live)'], ['#ff7ac6', 'Baaki din']]),
+    h('details.datatable', { open: true }, h('summary', {}, 'Date wise list'), h('div.row', { style: 'margin:8px 0' }, sortTabs), listScroll));
   async function readPlayDays() {
     const keys = Array.from({ length: 30 }, (_, i) => dayKey(29 - i));   // finished days come from this browser's cache after the first time
     const got = await Promise.all(keys.map(k => k === dayKey() ? Promise.resolve(today) : dayTotals(k, k >= dayKey(1)).catch(() => ({ ...EMPTY_DAY }))));
@@ -1205,10 +1349,12 @@ async function liveBoard(v, live, onLeave) {
     playDays = keys.map((key, i) => ({ key, t: got[i] }));
     drawPlayed();
   }
+  const secsOf = d => d.key === dayKey() ? shownSeconds : d.t.seconds;
+  const bestOf = list => list.reduce((b, d) => (secsOf(d) > (b ? secsOf(b) : 0) ? d : b), null);
   /** One bar a day, the busiest one in gold with its hours written on it. */
   function playBars(list) {
     const W = 720, H = 230, L = 40, B = 34, T = 22, R = 6, n = list.length, slot = (W - L - R) / n;
-    const val = d => d.key === dayKey() ? shownSeconds / 3600 : d.t.seconds / 3600;
+    const val = d => secsOf(d) / 3600;
     const most = Math.max(...list.map(val)), top = niceTop(Math.max(1, most)), y = v => T + (1 - v / top) * (H - T - B);
     const grid = [0, 0.5, 1].map(f => [svg('line', { x1: L, x2: W - R, y1: y(top * f), y2: y(top * f), class: 'gl' }), svg('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end' }, `${Math.round(top * f)}h`)]);
     const bestAt = most > 0 ? list.findIndex(d => val(d) === most) : -1;
@@ -1222,37 +1368,52 @@ async function liveBoard(v, live, onLeave) {
     });
     return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chartsvg', role: 'img', 'aria-label': 'Hours played each day' }, grid, bars);
   }
+  const tabsInto = (box, items, now, set) => box.replaceChildren(...items.map(([k, l]) => h('button.tab', { class: now === k ? 'on' : '', onclick: () => { set(k); drawPlayed(); } }, l)));
+  /** The numbers only: every second. */
+  function drawPlayedNums() {
+    if (allSeconds === null) { allNum.textContent = '-'; allSub.textContent = allError ? 'Server se total nahi mila. Internet check karo, thodi der me khud try karega.' : 'Server se jod raha hai...'; }
+    else { allNum.textContent = clockText(allShown); allSub.textContent = `${num(Math.floor(allShown / 3600))} ghante · har player ka time jod ke`; }
+    const n = play.playingCount();
+    liveLine.className = n ? 'playlive on' : 'playlive';
+    liveLine.textContent = n ? `${num(n)} ${n === 1 ? 'player' : 'players'} abhi khel ${n === 1 ? 'raha hai' : 'rahe hain'} · total har second +${num(n)} sec badh raha hai` : 'Abhi koi nahi khel raha, isliye total ruka hai. Koi game kholega to turant badhne lagega.';
+    nToday.textContent = firstTotals ? '-' : clockText(shownSeconds);
+    if (!playDays.length) return;
+    const list = playDays.slice(-playRange), best = bestOf(list);
+    nMonth.textContent = hours(playDays.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).reduce((s, d) => s + secsOf(d), 0));
+    nRangeLbl.textContent = `Pichhle ${playRange} din`; nRange.textContent = hours(list.reduce((s, d) => s + secsOf(d), 0));
+    nBest.textContent = best ? (best.key === dayKey() ? 'Aaj' : dateText(best.key)) : '-';
+    nBestSub.textContent = best ? `${hours(secsOf(best))} · ${num(best.t.players)} players` : '';
+    if (todayCell) todayCell.textContent = hours(shownSeconds);
+  }
+  /** The bars and the date list: when a report lands, and the bars every half minute so today's grows. */
   function drawPlayed() {
-    allNum = h('b.allnum.mono', {}, clockText(allShown)); todayNum = h('b.mono', {}, clockText(shownSeconds));
-    const list = playDays.slice(-playRange), secs = d => d.key === dayKey() ? shownSeconds : d.t.seconds;
-    const sum = list.reduce((s, d) => s + secs(d), 0), best = list.reduce((b, d) => (secs(d) > (b ? secs(b) : 0) ? d : b), null);
-    const month = playDays.filter(d => d.key.slice(0, 6) === dayKey().slice(0, 6)).reduce((s, d) => s + secs(d), 0);
-    const rows = [...list].sort((a, b) => playSort === 'most' ? secs(b) - secs(a) : b.key.localeCompare(a.key));
-    const tabs = (items, now, set) => h('div.tabs', { style: 'margin:0' }, items.map(([k, l]) => h('button.tab', { class: now === k ? 'on' : '', onclick: () => { set(k); drawPlayed(); } }, l)));
-    played.body.replaceChildren(
-      h('div.playtop', {},
-        h('div.allbox', {}, h('span.clabel', {}, 'Shuru se ab tak, sab players ka total'), allNum, h('small.faint', {}, `${num(Math.floor(allShown / 3600))} ghante · har second badhta hai`)),
-        h('div.minis', {},
-          h('div.mini', {}, h('span', {}, 'Aaj'), todayNum),
-          h('div.mini', {}, h('span', {}, 'Is mahine'), h('b.mono', {}, hours(month))),
-          h('div.mini', {}, h('span', {}, `Pichhle ${playRange} din`), h('b.mono', {}, hours(sum))),
-          h('div.mini.best', {}, h('span', {}, 'Sabse zyada kis din'), h('b', {}, best && secs(best) ? (best.key === dayKey() ? 'Aaj' : dateText(best.key)) : '-'), h('small', {}, best && secs(best) ? `${hours(secs(best))} · ${num(best.t.players)} players` : '')))),
-      h('div.row.between', {}, h('h3', { style: 'margin:0' }, 'Din ke hisaab se'), tabs([[7, '7 din'], [30, '30 din']], playRange, k => { playRange = k; })),
-      playDays.length ? playBars(list) : loading(),
-      legend([['#ffd23f', 'Sabse zyada khela'], ['#4fd65c', 'Aaj (live)'], ['#ff7ac6', 'Baaki din']]),
-      h('details.datatable.open', { open: true }, h('summary', {}, 'Date wise list'),
-        h('div.row', { style: 'margin:8px 0' }, tabs([['new', 'Nayi date pehle'], ['most', 'Sabse zyada pehle']], playSort, k => { playSort = k; })),
-        h('div.scroll', {}, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Date'), h('th.n', {}, 'Total khela'), h('th.n', {}, 'Players'), h('th.n', {}, 'Ek player avg'), h('th.n', {}, 'Races'))),
-          h('tbody', {}, rows.map(d => h('tr', { class: d === best && secs(d) ? 'besttr' : '' }, h('td', {}, d.key === dayKey() ? `Aaj · ${dateText(d.key)}` : dateText(d.key)), h('td.n.mono', {}, hours(secs(d))), h('td.n.mono', {}, num(d.t.players)), h('td.n.mono', {}, hours(d.t.players ? Math.round(secs(d) / d.t.players) : 0)), h('td.n.mono', {}, num(d.t.races)))))))));
+    tabsInto(rangeTabs, [[7, '7 din'], [30, '30 din']], playRange, k => { playRange = k; });
+    tabsInto(sortTabs, [['new', 'Nayi date pehle'], ['most', 'Sabse zyada pehle']], playSort, k => { playSort = k; });
+    if (playDays.length) {
+      const list = playDays.slice(-playRange), best = bestOf(list), rows = [...list].sort((a, b) => playSort === 'most' ? secsOf(b) - secsOf(a) : b.key.localeCompare(a.key));
+      chartBox.replaceChildren(playBars(list));
+      todayCell = null;
+      const st = listScroll.scrollTop;
+      listScroll.replaceChildren(h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Date'), h('th.n', {}, 'Total khela'), h('th.n', {}, 'Players'), h('th.n', {}, 'Ek player avg'), h('th.n', {}, 'Races'))),
+        h('tbody', {}, rows.map(d => {
+          const total = h('td.n.mono', {}, hours(secsOf(d)));
+          if (d.key === dayKey()) todayCell = total;
+          return h('tr', { class: d === best ? 'besttr' : '' }, h('td', {}, d.key === dayKey() ? `Aaj · ${dateText(d.key)}` : dateText(d.key)), total, h('td.n.mono', {}, num(d.t.players)), h('td.n.mono', {}, hours(d.t.players ? Math.round(secsOf(d) / d.t.players) : 0)), h('td.n.mono', {}, num(d.t.races)));
+        }))));
+      listScroll.scrollTop = st;
+    }
+    drawPlayedNums();
   }
 
+  /** Once a second: the server's sums plus what everyone playing has played since their own last report. Never goes back. */
   function tickHours() {
-    const est = today.seconds + unreported();
-    shownSeconds = Math.max(shownSeconds, est);
-    C.hours.b.textContent = clockText(shownSeconds); vsYesterday('hours', shownSeconds);
-    allShown = Math.max(allShown, allSeconds + (est - today.seconds));
-    if (allNum) allNum.textContent = clockText(allShown);
-    if (todayNum) todayNum.textContent = clockText(shownSeconds);
+    const extra = play.tick();
+    if (!firstTotals) {
+      shownSeconds = Math.max(shownSeconds, today.seconds + extra);
+      C.hours.b.textContent = clockText(shownSeconds); vsYesterday('hours', shownSeconds);
+      if (allSeconds !== null) allShown = Math.max(allShown, allSeconds + extra);
+    }
+    drawPlayedNums();
   }
 
   // ---------------------------------------------------------------- every report as it lands: the per-minute bars and the ticker
@@ -1300,15 +1461,16 @@ async function liveBoard(v, live, onLeave) {
 
   // ---------------------------------------------------------------- go
   const tickClock = () => { clock.textContent = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' IST'; };
-  tickClock(); watchPresence(); watchHistory(); sample(); drawPresence(); drawMinutes(); drawTicker();
+  tickClock(); watchPresence(); play.watch(); watchHistory(); sample(); drawPresence(); drawMinutes(); drawTicker(); drawPlayed();
   await readTotals();
   yesterday = await dayTotals(dayKey(1), true).catch(() => null);
   readPlayDays();
   if (!live()) return;
   drawTotals();
-  every(1000, () => { tickClock(); tickHours(); });
+  eachSecond(every, () => { tickClock(); tickHours(); });
   every(5000, () => { if (dayKey() !== startDay) { route(); return; } sample(); drawPresence(); drawMinutes(); });   // the day list redraws when a report lands, so its scroll stays put
-  every(120000, watchPresence);
+  every(30000, () => { if (playDays.length) chartBox.replaceChildren(playBars(playDays.slice(-playRange))); });   // today's bar grows
+  every(120000, () => { watchPresence(); play.watch(); });
   every(600000, watchHistory);   // slide the two-hour window forward
   every(60000, () => { if (Date.now() - lastRead > 55000) readTotals(); });
 }

@@ -131,3 +131,11 @@ th.sorted{color:var(--gold)}
 .chartsvg .bestlbl{fill:var(--gold);font-weight:700}
 .besttr td{background:rgba(255,210,63,.12)}
 .datatable.open .scroll{max-height:320px}
+.playlive{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--faint);line-height:1.35}.playlive::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;background:var(--faint)}
+.playlive.on{color:#a9f5b2}.playlive.on::before{background:var(--green);box-shadow:0 0 0 3px rgba(79,214,92,.22);animation:pulse 1.6s infinite}
+.daylist{max-height:420px;overflow:auto}
+.stat b.tick{font-size:24px;white-space:nowrap}
+.playtop{grid-template-columns:minmax(300px,1fr) minmax(0,1.7fr)}
+@media (max-width:1180px){.playtop{grid-template-columns:1fr}}
+.allnum{white-space:nowrap;overflow-wrap:normal;font-size:clamp(26px,7vw,40px)}
+.mini.best b{white-space:normal;overflow-wrap:anywhere}
